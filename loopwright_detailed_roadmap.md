@@ -153,6 +153,20 @@ The first three days connect what already exists. No new architecture. Just wire
 
 > After Sprint 1, you have something real: an autonomous loop that writes, tests, and self-corrects on your own codebase. That is the demo. Everything after is iteration.
 
+## Sprint 1 (Revised) — Based on Reality
+
+The original Sprint 1 was aspirational. This revision is grounded in what actually exists: Engram is production-ready, OpenClaw is running locally with worktrees, and events.jsonl captures everything. Nothing is stubbed or faked. The foundation is solid. What's missing is the orchestration layer — the loop controller that makes it autonomous. That's one week of focused building.
+
+| Day | Task | Output |
+|-----|------|--------|
+| **Day 1** | **Schema extension only.** Add worktrees + checkpoints + correction_cycles tables to sessions.db. Wire `events.jsonl` → sessions.db bridge so OpenClaw events flow into Engram's database with indexing. | sessions.db extended, event bridge flowing, migration passes |
+| **Day 2** | **Scripted A/B runner.** Automate what's currently manual: same prompt, two worktrees, capture results without eyeballing. Structured comparison output. | Repeatable A/B runs, results in DB |
+| **Day 3** | **Test runner integration.** Detect agent idle from event stream, run tests on delta files, parse output into structured error in correction_cycles table. | Test results appear in correction_cycles with structured errors |
+| **Day 4** | **Correction spawner.** This is the new build. Takes error from correction_cycles, builds injection brief, launches new agent in same worktree. This is what doesn't exist yet. | `loopwright/corrector.py` — first correction cycle runs |
+| **Day 5** | **Loop controller.** Orchestrate: spawn → test → checkpoint → correct → repeat. Max cycles. Real task on monra-app. | End-to-end loop on a real task, autonomous or escalated cleanly |
+
+> The bottom line: nothing is stubbed or faked. The foundation is solid. What's missing is the orchestration layer — the loop controller that makes it autonomous. That's one week of focused building.
+
 ## Open Decisions
 
 Things that need a decision before or during Sprint 1. Don't block on them — pick one and move.
