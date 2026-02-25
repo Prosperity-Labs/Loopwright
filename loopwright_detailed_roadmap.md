@@ -65,6 +65,7 @@ Snapshot of worktree state at a known-good moment. Rollback target.
 | `git_sha` | TEXT | Commit hash at checkpoint time |
 | `test_results` | JSON | Delta + integration test summary |
 | `artifact_snapshot` | JSON | Files written up to this point |
+| `graph_delta` | JSON | Noodlbox impact analysis: changed symbols, impacted callers, affected communities, disrupted processes. The structural understanding of what this checkpoint changed. |
 | `created_at` | TIMESTAMP | |
 | `label` | TEXT | Optional human label, e.g. 'after auth fix' |
 

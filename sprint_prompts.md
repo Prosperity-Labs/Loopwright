@@ -13,7 +13,8 @@ Custom local checkpoint/rollback system — no LangGraph. The harder path.
 **Components:**
 - **Git hooks** in each worktree: `post-commit` writes checkpoint rows to sessions.db, `pre-commit` captures diff snapshots
 - **Bun file watcher** (`fs.watch` / `Bun.file`) on worktree directories — detects file changes in real time, writes to events.jsonl
-- **sessions.db** as the single source of truth — every checkpoint is a git SHA + artifact snapshot
+- **Noodlbox graph delta** — at each checkpoint, run `noodlbox_detect_impact` to capture the *structural* change: which symbols changed, what calls them, which communities and processes are affected. Stored as graph_delta JSON in the checkpoint row.
+- **sessions.db** as the single source of truth — every checkpoint is a git SHA + artifact snapshot + graph delta
 - **Rollback** = `git checkout <sha>` in the worktree. No framework. Just git.
 
 **The pattern we're practicing:**
@@ -21,10 +22,23 @@ Custom local checkpoint/rollback system — no LangGraph. The harder path.
 file change detected (fs.watch)
   → event written to events.jsonl
   → bridge pushes event to sessions.db
-  → on test pass: git commit + checkpoint row written
-  → on test fail: error context captured, correction cycle begins
+  → on checkpoint: noodlbox_detect_impact → graph delta stored
+      - changed symbols: [validateBooking, formatAmount]
+      - impacted callers: [processPayment, createReservation]
+      - affected communities: [Payment Processing, Booking Engine]
+      - disrupted processes: [checkout-flow, reservation-flow]
+  → on test pass: git commit + checkpoint row + graph delta written
+  → on test fail: error context + graph delta → correction cycle begins
+      - correction brief includes causal chain from graph
+      - "you changed validateBooking() which is called by processPayment(), and processPayment() broke"
   → on rollback: git checkout <checkpoint_sha>, restore state
 ```
+
+**Why graph delta matters:**
+- File diffs tell you WHAT changed. Graph deltas tell you WHY something broke.
+- Correction briefs with causal chains are dramatically more useful than "tests failed in file X"
+- A/B comparison can show: "Agent A's changes had blast radius of 3 communities, Agent B's had 12"
+- Over time, sessions.db accumulates graph-level intelligence: which symbol clusters are fragile, which changes propagate furthest
 
 This is the exact pattern Loopwright will use in production. We're building it by using it.
 
@@ -64,6 +78,7 @@ NEW TABLES TO ADD:
    - git_sha TEXT (commit hash at checkpoint time)
    - test_results JSON
    - artifact_snapshot JSON (files written up to this point)
+   - graph_delta JSON (Noodlbox impact analysis: changed symbols, impacted callers, affected communities, disrupted processes)
    - created_at TIMESTAMP
    - label TEXT (optional, e.g. 'after auth fix')
 
@@ -138,9 +153,15 @@ BUILD:
    - This is the real-time monitoring layer — every file touch is recorded
 
 3. src/checkpoint.ts — Custom checkpoint manager (no LangGraph)
-   - create_checkpoint(worktree_path, worktree_id, db_path):
+   - create_checkpoint(worktree_path, worktree_id, db_path, repo_name):
      * Get current git SHA: Bun.spawn(['git', 'rev-parse', 'HEAD'])
      * Get changed files: Bun.spawn(['git', 'diff', '--name-only', 'HEAD~1'])
+     * Get graph delta: call Noodlbox noodlbox_detect_impact(repository=repo_name) to capture:
+       - changed_symbols: which functions/classes were modified
+       - impacted_callers: what calls those symbols (the blast radius)
+       - affected_communities: which functional modules are disrupted
+       - disrupted_processes: which execution flows are broken
+     * Store graph_delta as JSON in the checkpoint row
      * Write checkpoint row to sessions.db checkpoints table
      * Return checkpoint_id
    - rollback_to_checkpoint(worktree_path, checkpoint_id, db_path):
@@ -422,6 +443,13 @@ BUILD:
 
        ### Checkpoint State
        Based on commit {git_sha}. Files modified since base: {list}
+
+       ### Graph Delta (from Noodlbox)
+       Changed symbols: {list of functions/classes modified}
+       Impacted callers: {what calls those symbols — the causal chain}
+       Affected communities: {which functional modules are disrupted}
+       Disrupted processes: {which execution flows are broken}
+       → "You changed {symbol}, which is called by {caller}, and {caller} broke because {error}"
 
        ### Historical Context (from Engram)
        {similar errors from past sessions, what fixed them}
