@@ -93,14 +93,14 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 |------|----------------------|--------|--------|
 | Add worktrees + checkpoints + correction_cycles tables to sessions.db | Engram `session_db.py` — extend schema. 10 lines of SQL. | 2h | 🔵 Todo |
 | Wire replay button in OpenClaw to actual session replay | OpenClaw `event-store.js` + `server.js`. Load JSONL for session_id, stream events back through SSE. | 1 day | 🔵 Todo |
-| Build worktree spawner: create branch, install deps, return worktree path | OpenClaw `run-multi.sh` or new `loopwright/spawner.py`. Git worktree add + setup. | half day | 🔶 Partial |
+| Build worktree spawner: create branch, install deps, return worktree path | OpenClaw `run-multi.sh` or new `loopwright/spawner.ts`. Git worktree add + setup. | half day | 🔶 Partial |
 | Wire Engram brief injection before agent starts in worktree | Engram `brief.py` → write to worktree's CLAUDE.md before agent launch. Already works for monra-app. | 2h | 🔶 Partial |
 | Add Axon MCP to agent context: blast radius before first write | Add axon to `.mcp.json` in spawned worktree. `axon impact <changed_symbol>` before write. | half day | 🔵 Todo |
 | Test runner integration: run pytest/jest on delta files after agent idles | Detect agent idle from event stream. Run tests scoped to changed files. Write results to sessions.db. | 1 day | 🔵 Todo |
 | Checkpoint writer: on test pass, save git SHA + artifact snapshot | New `engram/checkpoint.py`. Reads current worktree git SHA + artifact state from sessions.db. | half day | 🔵 Todo |
 | Error capture (local only): parse test output into structured error context | No MCP yet — just parse pytest/jest stdout. Extract file:line, error type, message. Write to correction_cycles. | half day | 🔵 Todo |
-| Correction cycle spawner: new agent with error context + checkpoint injected | `loopwright/corrector.py`. Builds correction brief from error context + prior checkpoint. Launches new agent in same worktree. | 1 day | 🔵 Todo |
-| Loop controller: orchestrate up to N cycles, write final status to sessions.db | `loopwright/loop.py`. Manages the cycle: spawn → test → checkpoint/correct → repeat. Max cycles config. | 1 day | 🔵 Todo |
+| Correction cycle spawner: new agent with error context + checkpoint injected | `loopwright/corrector.ts`. Builds correction brief from error context + prior checkpoint. Launches new agent in same worktree. | 1 day | 🔵 Todo |
+| Loop controller: orchestrate up to N cycles, write final status to sessions.db | `loopwright/loop.ts`. Manages the cycle: spawn → test → checkpoint/correct → repeat. Max cycles config. Bun event loop handles N agents concurrently. | 1 day | 🔵 Todo |
 | OpenClaw dashboard: show correction cycles in live view | Add correction_cycles panel to `index.html`. Show cycle number, trigger error, outcome per worktree. | half day | 🔵 Todo |
 | Test on monra-app: one real task through the full loop | Pick a small real ticket. Run it. Observe. Fix what breaks. | 1 day | 🔵 Todo |
 
@@ -113,12 +113,12 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 | MCP tool: browser console capture (Playwright) | New MCP server: playwright → capture console errors, network failures, screenshots on test. Write to `correction_cycles.error_context`. | 1 day | 🔵 Todo |
 | MCP tool: MySQL/Postgres error capture | Query error logs table or `pg_stat_activity` for recent errors matching session timeframe. Write to `error_context`. | half day | 🔵 Todo |
 | MCP tool: AWS CloudWatch log capture | AWS SDK → fetch log events for relevant Lambda/service in correction window. Write to `error_context`. | 1 day | 🔵 Todo |
-| Staging deploy on test pass: Docker or SSH deploy script | `loopwright/deployer.py`. On checkpoint created: trigger deploy to staging env. Write deploy status to worktrees table. | 1 day | 🔵 Todo |
+| Staging deploy on test pass: Docker or SSH deploy script | `loopwright/deployer.ts`. On checkpoint created: trigger deploy to staging env. Write deploy status to worktrees table. | 1 day | 🔵 Todo |
 | Staging health check: verify deploy didn't break existing flows | Run smoke tests against staging after deploy. If fail: rollback to prior checkpoint, mark worktree as failed. | half day | 🔵 Todo |
 | Escalation: notify human on loop limit reached | Slack MCP or email. Include: task description, correction cycle history, last error, link to OpenClaw session replay. | half day | 🔵 Todo |
 | Full audit trail: every correction cycle readable in OpenClaw replay | Wire correction_cycles to replay view. Step through: what agent wrote → what test said → what error captured → what correction tried. | 1 day | 🔵 Todo |
 | Integration tests against main replica: Docker compose shadow env | Spin up shadow DB + services from docker-compose. Run integration suite against shadow, not staging. Prevents staging pollution. | 2 days | 🔵 Todo |
-| Loop telemetry: anonymized stats (cycle counts, error rates, durations) | `loopwright/telemetry.py`. Opt-in. Sends only numbers, never content. Informs product improvement. | half day | 🔵 Todo |
+| Loop telemetry: anonymized stats (cycle counts, error rates, durations) | `loopwright/telemetry.ts`. Opt-in. Sends only numbers, never content. Informs product improvement. | half day | 🔵 Todo |
 
 ## Milestone 3 — Full CI/CD Replacement
 
@@ -128,13 +128,13 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 |------|----------------------|--------|--------|
 | PostHog MCP: read user behavior metrics from staging | PostHog API → fetch session counts, error rates, funnel completion for feature flag cohort. Write to sessions.db. | 1 day | 🔵 Todo |
 | A/B flag injection: deploy feature to % of staging users | Feature flag via PostHog or LaunchDarkly. Agent decides cohort size based on risk (Axon blast radius). | 1 day | 🔵 Todo |
-| Metrics-based merge decision: auto-merge or auto-rollback | `loopwright/decider.py`. Compare metrics between control and treatment. If within threshold: merge. If degraded: rollback. | 1 day | 🔵 Todo |
+| Metrics-based merge decision: auto-merge or auto-rollback | `loopwright/decider.ts`. Compare metrics between control and treatment. If within threshold: merge. If degraded: rollback. | 1 day | 🔵 Todo |
 | Progressive rollout: 5% → 25% → 100% with metric checks at each step | Configurable rollout ladder. Each step waits T minutes, checks metrics, proceeds or halts. | 1 day | 🔵 Todo |
 | Team dashboard: what shipped this week, what is running now | OpenClaw new view. Per-task status: running / passed / escalated / merged. Filter by agent, by file, by date. | 1 day | 🔵 Todo |
 | GitHub/Linear trigger integration: task arrives, loop starts automatically | Webhook receiver. Issue created → extract task description → spawn worktree → begin loop. | 1 day | 🔵 Todo |
 | Continuous intelligence: loop learns from prior correction cycles | Before each correction, query correction_cycles for same file + similar error. Inject 'last time this broke, here is what fixed it' into agent brief. | 1 day | 🔵 Todo |
 | Self-hosted deployment package: Docker compose, license, docs | `docker-compose.yml` for Loopwright + Engram + OpenClaw. One command install. License check on startup. | 2 days | 🔵 Todo |
-| Usage-based billing: count successful merges, emit billing events | `loopwright/billing.py`. On merge: emit event with worktree_id, cycle_count, task_type. Integrate with Stripe or Lago. | 1 day | 🔵 Todo |
+| Usage-based billing: count successful merges, emit billing events | `loopwright/billing.ts`. On merge: emit event with worktree_id, cycle_count, task_type. Integrate with Stripe or Lago. | 1 day | 🔵 Todo |
 
 ## Sprint 1 — Start Now (This Week)
 
@@ -162,7 +162,7 @@ The original Sprint 1 was aspirational. This revision is grounded in what actual
 | **Day 1** | **Schema extension only.** Add worktrees + checkpoints + correction_cycles tables to sessions.db. Wire `events.jsonl` → sessions.db bridge so OpenClaw events flow into Engram's database with indexing. | sessions.db extended, event bridge flowing, migration passes |
 | **Day 2** | **Scripted A/B runner.** Automate what's currently manual: same prompt, two worktrees, capture results without eyeballing. Structured comparison output. | Repeatable A/B runs, results in DB |
 | **Day 3** | **Test runner integration.** Detect agent idle from event stream, run tests on delta files, parse output into structured error in correction_cycles table. | Test results appear in correction_cycles with structured errors |
-| **Day 4** | **Correction spawner.** This is the new build. Takes error from correction_cycles, builds injection brief, launches new agent in same worktree. This is what doesn't exist yet. | `loopwright/corrector.py` — first correction cycle runs |
+| **Day 4** | **Correction spawner.** This is the new build. Takes error from correction_cycles, builds injection brief, launches new agent in same worktree. This is what doesn't exist yet. | `loopwright/corrector.ts` — first correction cycle runs |
 | **Day 5** | **Loop controller.** Orchestrate: spawn → test → checkpoint → correct → repeat. Max cycles. Real task on monra-app. | End-to-end loop on a real task, autonomous or escalated cleanly |
 
 > The bottom line: nothing is stubbed or faked. The foundation is solid. What's missing is the orchestration layer — the loop controller that makes it autonomous. That's one week of focused building.
@@ -173,7 +173,7 @@ Things that need a decision before or during Sprint 1. Don't block on them — p
 
 | Decision | Recommendation |
 |----------|---------------|
-| **Loop orchestrator language** — Python (consistent with Engram) or Node.js (consistent with OpenClaw). | Python — sessions.db integration is already there. |
+| ~~**Loop orchestrator language** — Python (consistent with Engram) or Node.js (consistent with OpenClaw).~~ | ✅ **Decided: Bun/TypeScript.** Event loop is native to the orchestration pattern. Matches OpenClaw (JS). `better-sqlite3` reads sessions.db synchronously. Bun's `spawn()` gives native subprocess management for parallel agents. Engram stays Python — SQLite is the contract between them. |
 | **LangGraph vs custom checkpointing** — LangGraph gives you checkpointing + rollback for free but adds a dependency. Custom checkpointing in sessions.db is simpler and you already have the schema. | Custom first, LangGraph if complexity demands it. |
 | **Max correction cycles default** — Too low (2) and it escalates constantly. Too high (10) and it wastes tokens on unsolvable problems. | 3, configurable per task type. |
 | **Agent identity in worktrees** — Should each correction cycle use the same agent type or try different ones (Claude → Codex → Cursor)? | Same agent, different context injection. Multi-agent correction adds complexity without proven benefit yet. |

@@ -68,6 +68,7 @@ Loopwright is built on components that already exist:
 | **Engram (sessions.db)** | Session history and failure memory. Agent knows what failed before it writes a line. |
 | **OpenClaw** | Live cross-agent tracking. Which files each agent touched, in real time. |
 | **Axon (MCP)** | Blast radius before any change. Static codebase intelligence informs the agent's risk surface. |
+| **Bun** | The orchestration runtime. Event loop handles N concurrent agents natively via `spawn()`. `better-sqlite3` reads sessions.db synchronously. Same JS ecosystem as OpenClaw. |
 | **LangGraph** | Checkpoint and rollback. Every correction cycle has a recoverable prior state. |
 | **MCP Tools** | Error observation layer. Browser console, MySQL, AWS logs — agent sees what actually broke. |
 | **PostHog MCP** | A/B validation. Agent reads real user behavior metrics before approving merge. |
@@ -130,7 +131,7 @@ Loopwright is not a separate product from Engram and OpenClaw. It is what they a
 |---------|-------------------|
 | **Engram** | The memory layer. sessions.db stores artifact history, failure patterns, and checkpoint state. Loopwright reads from it before every correction cycle. |
 | **OpenClaw** | The observability layer. Live cross-agent tracking, session replay, multi-worktree dashboard. Loopwright's control plane. |
-| **Loopwright** | The execution layer. Orchestrates the correction loop. Uses Engram's memory and OpenClaw's visibility to close the feedback cycle. |
+| **Loopwright** | The execution layer. Built in Bun/TypeScript. Orchestrates the correction loop. Uses Engram's memory and OpenClaw's visibility to close the feedback cycle. The event loop *is* the loop controller. |
 
 One SQLite file. Three interfaces. The file compounds over time and any tool can read it. File over app — the data is the product.
 
