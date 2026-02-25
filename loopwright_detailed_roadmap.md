@@ -114,11 +114,12 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 | MCP tool: browser console capture (Playwright) | New MCP server: playwright → capture console errors, network failures, screenshots on test. Write to `correction_cycles.error_context`. | 1 day | 🔵 Todo |
 | MCP tool: MySQL/Postgres error capture | Query error logs table or `pg_stat_activity` for recent errors matching session timeframe. Write to `error_context`. | half day | 🔵 Todo |
 | MCP tool: AWS CloudWatch log capture | AWS SDK → fetch log events for relevant Lambda/service in correction window. Write to `error_context`. | 1 day | 🔵 Todo |
-| Staging deploy on test pass: Docker or SSH deploy script | `loopwright/deployer.ts`. On checkpoint created: trigger deploy to staging env. Write deploy status to worktrees table. | 1 day | 🔵 Todo |
+| Staging deploy on test pass: Podman pod deploy | `loopwright/deployer.ts`. On checkpoint created: trigger deploy to staging via Podman pod. Write deploy status to worktrees table. | 1 day | 🔵 Todo |
 | Staging health check: verify deploy didn't break existing flows | Run smoke tests against staging after deploy. If fail: rollback to prior checkpoint, mark worktree as failed. | half day | 🔵 Todo |
 | Escalation: notify human on loop limit reached | Slack MCP or email. Include: task description, correction cycle history, last error, link to OpenClaw session replay. | half day | 🔵 Todo |
 | Full audit trail: every correction cycle readable in OpenClaw replay | Wire correction_cycles to replay view. Step through: what agent wrote → what test said → what error captured → what correction tried. | 1 day | 🔵 Todo |
-| Integration tests against main replica: Docker compose shadow env | Spin up shadow DB + services from docker-compose. Run integration suite against shadow, not staging. Prevents staging pollution. | 2 days | 🔵 Todo |
+| Integration tests against main replica: Podman pod shadow env | Spin up shadow DB + services as Podman pod (podman-compose or pod create). Run integration suite against shadow, not staging. Prevents staging pollution. Rootless, no daemon. | 2 days | 🔵 Todo |
+| Podman agent isolation: one pod per agent loop | Each agent loop runs in a Podman pod: agent container + worktree volume + file watcher sidecar. `Bun.spawn(['podman', 'pod', 'create', ...])`. Rootless, no Docker daemon. Network namespace isolation between agents. | 1 day | 🔵 Todo |
 | Loop telemetry: anonymized stats (cycle counts, error rates, durations) | `loopwright/telemetry.ts`. Opt-in. Sends only numbers, never content. Informs product improvement. | half day | 🔵 Todo |
 
 ## Milestone 3 — Full CI/CD Replacement
@@ -134,7 +135,8 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 | Team dashboard: what shipped this week, what is running now | OpenClaw new view. Per-task status: running / passed / escalated / merged. Filter by agent, by file, by date. | 1 day | 🔵 Todo |
 | GitHub/Linear trigger integration: task arrives, loop starts automatically | Webhook receiver. Issue created → extract task description → spawn worktree → begin loop. | 1 day | 🔵 Todo |
 | Continuous intelligence: loop learns from prior correction cycles | Before each correction, query correction_cycles for same file + similar error. Inject 'last time this broke, here is what fixed it' into agent brief. | 1 day | 🔵 Todo |
-| Self-hosted deployment package: Docker compose, license, docs | `docker-compose.yml` for Loopwright + Engram + OpenClaw. One command install. License check on startup. | 2 days | 🔵 Todo |
+| Self-hosted deployment package: Podman compose, systemd, license, docs | `podman-compose.yml` for Loopwright + Engram + OpenClaw. `podman generate systemd` for production service management. One command install. Rootless. No Docker daemon required. License check on startup. | 2 days | 🔵 Todo |
+| Multi-machine scaling: Podman + systemd on N nodes | Each machine runs Podman pods managed by systemd. Loop controller on primary node dispatches tasks to agent pods on worker nodes. No Kubernetes unless 100+ concurrent agents. | 2 days | 🔵 Todo |
 | Usage-based billing: count successful merges, emit billing events | `loopwright/billing.ts`. On merge: emit event with worktree_id, cycle_count, task_type. Integrate with Stripe or Lago. | 1 day | 🔵 Todo |
 
 ## Sprint 1 — Start Now (This Week)

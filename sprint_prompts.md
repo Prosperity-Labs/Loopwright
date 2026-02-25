@@ -40,6 +40,12 @@ file change detected (fs.watch)
 - A/B comparison can show: "Agent A's changes had blast radius of 3 communities, Agent B's had 12"
 - Over time, sessions.db accumulates graph-level intelligence: which symbol clusters are fragile, which changes propagate furthest
 
+**Infrastructure scaling path:**
+- Sprint 1: bare git worktrees, no containers. Learn the pattern first.
+- Milestone 2: Podman pods. One pod = one agent loop (worktree volume + agent + watcher + test runner). Rootless, daemonless.
+- Milestone 3: Podman + systemd across multiple machines. Loop controller dispatches to worker nodes.
+- Day 5 code should be structured so `Bun.spawn()` calls can be swapped for `podman run` commands later without rewriting the loop logic.
+
 This is the exact pattern Loopwright will use in production. We're building it by using it.
 
 ---
@@ -654,12 +660,27 @@ BUILD:
    - The Bun event loop handles all of them in one process
    - This is the demo of why Bun was the right choice
 
-3. Update src/cli.ts:
+3. src/spawner.ts — Podman-ready agent spawner (abstraction layer)
+   - Abstract agent spawning behind an interface:
+     * interface AgentSpawner { spawn(config): Promise<AgentProcess> }
+     * class LocalSpawner — uses Bun.spawn() directly (Sprint 1, current)
+     * class PodmanSpawner — uses Bun.spawn(['podman', 'run', ...]) (Milestone 2)
+   - LocalSpawner for now:
+     * Bun.spawn(['claude', '--print', prompt], { cwd: worktree_path })
+   - PodmanSpawner stub (implement in Milestone 2):
+     * Bun.spawn(['podman', 'pod', 'create', '--name', pod_name])
+     * Bun.spawn(['podman', 'run', '--pod', pod_name, '-v', worktree_path + ':/workspace', image, 'claude', '--print', prompt])
+     * Each pod gets: agent container + worktree volume mount + shared network namespace
+   - loop.ts and multi-loop.ts use the interface, not the implementation
+   - This means swapping from local to Podman is a config change, not a rewrite
+   - Rootless Podman: no Docker daemon, no root. Enterprise-ready from day one.
+
+4. Update src/cli.ts:
    - bun run src/cli.ts loop --task "fix the login validation" --repo /path/to/repo --max-cycles 3
    - bun run src/cli.ts multi --tasks tasks.json --repo /path/to/repo
    - bun run src/cli.ts status --worktree-id <id>
 
-4. RUN THE REAL TASK:
+5. RUN THE REAL TASK:
    - Target: monra-app at /home/prosperitylabs/Desktop/development/monra.app
    - Task: (whatever Agent 1 identified as the test task)
    - Run: bun run src/cli.ts loop --task "<task>" --repo /home/prosperitylabs/Desktop/development/monra.app --max-cycles 3
@@ -698,5 +719,7 @@ After Day 5, verify:
 5. **The loop terminated** — did it pass or escalate cleanly (not hang)?
 6. **File watchers caught everything** — no gaps in the event stream
 7. **Multi-loop potential** — could you run 2+ loops concurrently?
+8. **Podman-ready abstraction** — could you swap LocalSpawner for PodmanSpawner without rewriting loop logic?
+9. **Graph deltas captured** — does each checkpoint have structural impact data from Noodlbox?
 
-If all 7 check out: Sprint 1 is complete. The loop exists. Everything after is iteration.
+If all 9 check out: Sprint 1 is complete. The loop exists. Everything after is iteration.

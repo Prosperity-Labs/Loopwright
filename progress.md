@@ -27,6 +27,9 @@
 - Agent 1 (with Engram) handles memory-layer work
 - Agent 2 (without Engram) handles greenfield orchestration
 - **Loopwright orchestration layer: Bun/TypeScript** — event loop native, matches OpenClaw, `better-sqlite3` for sessions.db, `Bun.spawn()` for parallel agents. Engram stays Python. SQLite is the contract.
+- **Infrastructure: Podman** — rootless, daemonless. Scaling: bare worktrees (Sprint 1) → Podman pods (M2) → Podman + systemd multi-machine (M3) → Kubernetes only if 100+ agents
+- **Checkpointing: Custom local** — git SHAs + sessions.db + Noodlbox graph deltas. No LangGraph.
+- **Graph delta tracking** — Noodlbox `detect_impact` at each checkpoint captures structural change (symbols, callers, communities, processes)
 
 **Blockers:** None
 **Next:** Begin Phase 1 — Schema extension + event bridge

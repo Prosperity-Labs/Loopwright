@@ -95,11 +95,47 @@ The missing piece is the **orchestration layer** (Days 4-5 of sprint). Everythin
 - Loop controller CPU barely moves as agents scale — it's just reading events and dispatching
 - Delegation chain: loop controller → agents → sub-agents → correction agents — all through one event stream
 
+### Infrastructure Scaling: Podman (2026-02-24)
+
+**Decision:** Podman for agent isolation and scaling. No Docker daemon. No Kubernetes (unless 100+ agents).
+
+**Rationale:**
+- **Rootless** — agents run without root. Enterprise security teams approve.
+- **Daemonless** — no Docker daemon process. Bun's event loop manages containers directly via `podman run` / `podman pod create`.
+- **Pod concept** — a Podman pod groups containers sharing a network namespace. One pod = one agent loop: worktree volume + agent container + file watcher sidecar + test runner.
+- **Systemd integration** — `podman generate systemd` gives production service management for free on Linux. No orchestrator needed.
+- **Docker-compatible** — when enterprise says "we only run Docker," Podman works with Docker too. Same CLI, same images.
+- **Self-hosted story stays clean** — no cloud compute, no daemon, no Kubernetes cluster. Just `podman` on the machine.
+
+**Scaling path:**
+```
+Sprint 1:     git worktrees (bare, no containers)
+Milestone 2:  Podman pods (one pod per agent loop, isolation + shadow envs)
+Milestone 3:  Podman + systemd on multiple machines (dispatch tasks to worker nodes)
+Only if 100+: Kubernetes (each agent = a pod with worktree PVC)
+```
+
+**What this means for the sprint:**
+- Sprint 1: no containers. Bare worktrees. Learn the pattern.
+- Day 5: structure code so `Bun.spawn()` calls can be swapped for `podman run` later
+- Milestone 2: each shadow env / staging deploy runs as a Podman pod
+
+### Checkpointing: Custom Local (No LangGraph) (2026-02-24)
+
+**Decision:** Custom checkpoint/rollback using git SHAs + sessions.db. No LangGraph.
+
+**Rationale:**
+- Git SHAs are natural checkpoints — every commit is a restorable state
+- sessions.db stores the metadata: which SHA, what test results, what artifacts
+- Graph delta (from Noodlbox) stored alongside each checkpoint for structural understanding
+- Rollback = `git checkout <sha>`. Instant. No framework overhead.
+- LangGraph checkpoints conversation state. We checkpoint *codebase* state. The codebase ships, not the conversation.
+
 ---
 
 ## Decisions Pending
 
-- LangGraph vs custom checkpointing
+- ~~LangGraph vs custom checkpointing~~ (decided: custom)
 - Max correction cycles default
 - Agent identity in worktrees
 - Test scope detection method
