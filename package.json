@@ -1,0 +1,19 @@
+{
+  "name": "loopwright",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "bun test",
+    "bridge": "bun run src/bridge.ts",
+    "watcher": "bun run src/watcher.ts",
+    "checkpoint": "bun run src/checkpoint.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
