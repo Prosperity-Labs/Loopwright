@@ -70,6 +70,7 @@ Loopwright is built on components that already exist:
 | **Axon (MCP)** | Blast radius before any change. Static codebase intelligence informs the agent's risk surface. |
 | **Bun** | The orchestration runtime. Event loop handles N concurrent agents natively via `spawn()`. `better-sqlite3` reads sessions.db synchronously. Same JS ecosystem as OpenClaw. |
 | **Podman** | Agent isolation and scaling. Rootless, daemonless. One pod = one agent loop (worktree + watcher + test runner). `podman generate systemd` for production. No Docker daemon. Scales from 1 machine to N via systemd, Kubernetes only if 100+ agents. |
+| **Memgraph** | Temporal graph intelligence. Syncs graph deltas from sessions.db. Answers: "how did this symbol's relationships change over 10 correction cycles?" and "every time someone modifies Payment community, Booking breaks 3 cycles later." Powers the continuous intelligence promise. SQLite stays source of truth, Memgraph is the temporal query layer. |
 | **LangGraph** | Checkpoint and rollback. Every correction cycle has a recoverable prior state. |
 | **MCP Tools** | Error observation layer. Browser console, MySQL, AWS logs — agent sees what actually broke. |
 | **PostHog MCP** | A/B validation. Agent reads real user behavior metrics before approving merge. |

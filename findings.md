@@ -133,6 +133,31 @@ Only if 100+: Kubernetes (each agent = a pod with worktree PVC)
 
 ---
 
+### Temporal Graph: Memgraph (2026-02-24)
+
+**Decision:** Memgraph for temporal awareness in Milestone 2/3. SQLite stays source of truth.
+
+**Rationale:**
+- SQLite stores rows with timestamps. Memgraph stores **relationships with temporal properties**.
+- Sprint 1: SQLite is enough. Learning the pattern.
+- Milestone 2: Recurring failures appear. SQLite queries get awkward (joins + groups + ordering across correction_cycles, checkpoints, graph deltas).
+- Milestone 3: Continuous intelligence requires temporal graph queries:
+  * "How did the relationship between `validateBooking` and `processPayment` change over 10 correction cycles?"
+  * "Every time someone modifies a symbol in the Payment community, Booking breaks 3 cycles later"
+  * "This symbol has been corrected 7 times, and each time the fix propagated to the same 3 callers"
+- SQLite = source of truth (file over app, portable). Memgraph = temporal query layer (sync from SQLite).
+- Noodlbox provides the static graph snapshot. Memgraph accumulates those snapshots over time.
+
+**Data flow:**
+```
+Noodlbox (static graph at checkpoint time)
+  → graph_delta JSON in sessions.db checkpoint row
+  → sync to Memgraph with temporal properties (timestamp, cycle_number, worktree_id)
+  → temporal queries power correction briefs and continuous intelligence
+```
+
+---
+
 ## Decisions Pending
 
 - ~~LangGraph vs custom checkpointing~~ (decided: custom)

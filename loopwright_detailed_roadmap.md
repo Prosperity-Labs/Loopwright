@@ -121,6 +121,7 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 | Integration tests against main replica: Podman pod shadow env | Spin up shadow DB + services as Podman pod (podman-compose or pod create). Run integration suite against shadow, not staging. Prevents staging pollution. Rootless, no daemon. | 2 days | 🔵 Todo |
 | Podman agent isolation: one pod per agent loop | Each agent loop runs in a Podman pod: agent container + worktree volume + file watcher sidecar. `Bun.spawn(['podman', 'pod', 'create', ...])`. Rootless, no Docker daemon. Network namespace isolation between agents. | 1 day | 🔵 Todo |
 | Loop telemetry: anonymized stats (cycle counts, error rates, durations) | `loopwright/telemetry.ts`. Opt-in. Sends only numbers, never content. Informs product improvement. | half day | 🔵 Todo |
+| Memgraph integration: temporal graph for correction pattern detection | Sync graph deltas from sessions.db → Memgraph. Temporal queries: how symbol relationships change across correction cycles, recurring failure patterns, causal chain history. SQLite stays source of truth, Memgraph is the query layer for time-aware graph intelligence. | 2 days | 🔵 Todo |
 
 ## Milestone 3 — Full CI/CD Replacement
 
@@ -134,7 +135,7 @@ One row per self-correction attempt. Enables replay and post-incident analysis.
 | Progressive rollout: 5% → 25% → 100% with metric checks at each step | Configurable rollout ladder. Each step waits T minutes, checks metrics, proceeds or halts. | 1 day | 🔵 Todo |
 | Team dashboard: what shipped this week, what is running now | OpenClaw new view. Per-task status: running / passed / escalated / merged. Filter by agent, by file, by date. | 1 day | 🔵 Todo |
 | GitHub/Linear trigger integration: task arrives, loop starts automatically | Webhook receiver. Issue created → extract task description → spawn worktree → begin loop. | 1 day | 🔵 Todo |
-| Continuous intelligence: loop learns from prior correction cycles | Before each correction, query correction_cycles for same file + similar error. Inject 'last time this broke, here is what fixed it' into agent brief. | 1 day | 🔵 Todo |
+| Continuous intelligence: loop learns from prior correction cycles | Before each correction, query Memgraph for temporal patterns: same symbol + similar error across time. Inject 'last time this broke, here is what fixed it' + 'this symbol cluster breaks every time X changes' into agent brief. Memgraph powers the "gets smarter over time" promise. | 1 day | 🔵 Todo |
 | Self-hosted deployment package: Podman compose, systemd, license, docs | `podman-compose.yml` for Loopwright + Engram + OpenClaw. `podman generate systemd` for production service management. One command install. Rootless. No Docker daemon required. License check on startup. | 2 days | 🔵 Todo |
 | Multi-machine scaling: Podman + systemd on N nodes | Each machine runs Podman pods managed by systemd. Loop controller on primary node dispatches tasks to agent pods on worker nodes. No Kubernetes unless 100+ concurrent agents. | 2 days | 🔵 Todo |
 | Usage-based billing: count successful merges, emit billing events | `loopwright/billing.ts`. On merge: emit event with worktree_id, cycle_count, task_type. Integrate with Stripe or Lago. | 1 day | 🔵 Todo |
