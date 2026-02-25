@@ -69,6 +69,46 @@ export interface CheckpointRow {
   label: string | null;
 }
 
+export interface WorktreeRow {
+  id: number;
+  session_id: string | null;
+  branch_name: string;
+  base_branch: string;
+  status: "active" | "passed" | "failed" | "escalated" | "merged";
+  task_description: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface ArtifactRow {
+  id: number;
+  session_id: string | null;
+  worktree_id: string | null;
+  file_path: string;
+  event_type: string;
+  content: string | null;
+  metadata_json: string | null;
+  timestamp: string;
+  raw_event_json: string | null;
+}
+
+export interface ComparisonInsertInput {
+  worktree_a_id: number;
+  worktree_b_id: number;
+  json_report: JsonValue;
+  markdown_report: string;
+  created_at?: string;
+}
+
+export interface ComparisonRow {
+  id: number;
+  worktree_a_id: number;
+  worktree_b_id: number;
+  json_report: string;
+  markdown_report: string;
+  created_at: string;
+}
+
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -140,6 +180,17 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 
 CREATE INDEX IF NOT EXISTS idx_checkpoints_worktree ON checkpoints(worktree_id);
+
+CREATE TABLE IF NOT EXISTS comparisons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  worktree_a_id INTEGER NOT NULL REFERENCES worktrees(id),
+  worktree_b_id INTEGER NOT NULL REFERENCES worktrees(id),
+  json_report TEXT NOT NULL,
+  markdown_report TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_comparisons_pair ON comparisons(worktree_a_id, worktree_b_id, created_at);
 `;
 
 function isoNow(): string {
@@ -164,6 +215,10 @@ export class LoopwrightDB {
   private readonly insertCheckpointStmt;
   private readonly getCheckpointByIdStmt;
   private readonly listCheckpointsStmt;
+  private readonly getWorktreeByIdStmt;
+  private readonly listArtifactsByWorktreeStmt;
+  private readonly insertComparisonStmt;
+  private readonly getLatestComparisonForPairStmt;
 
   constructor(public readonly dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -236,6 +291,31 @@ export class LoopwrightDB {
       SELECT id, worktree_id, session_id, git_sha, test_results, artifact_snapshot, graph_delta, created_at, label
       FROM checkpoints WHERE worktree_id = ? ORDER BY created_at ASC, id ASC
     `);
+
+    this.getWorktreeByIdStmt = this.sqlite.prepare(`
+      SELECT id, session_id, branch_name, base_branch, status, task_description, created_at, resolved_at
+      FROM worktrees WHERE id = ?
+    `);
+
+    this.listArtifactsByWorktreeStmt = this.sqlite.prepare(`
+      SELECT id, session_id, worktree_id, file_path, event_type, content, metadata_json, timestamp, raw_event_json
+      FROM artifacts
+      WHERE worktree_id = ?
+      ORDER BY timestamp ASC, id ASC
+    `);
+
+    this.insertComparisonStmt = this.sqlite.prepare(`
+      INSERT INTO comparisons (worktree_a_id, worktree_b_id, json_report, markdown_report, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    this.getLatestComparisonForPairStmt = this.sqlite.prepare(`
+      SELECT id, worktree_a_id, worktree_b_id, json_report, markdown_report, created_at
+      FROM comparisons
+      WHERE (worktree_a_id = ? AND worktree_b_id = ?) OR (worktree_a_id = ? AND worktree_b_id = ?)
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `);
   }
 
   close(): void {
@@ -303,6 +383,10 @@ export class LoopwrightDB {
   }
 
   upsertWorktree(input: WorktreeUpsertInput): number {
+    if (input.session_id) {
+      this.ensureSession({ session_id: input.session_id });
+    }
+
     const row = {
       id: input.id,
       session_id: input.session_id ?? null,
@@ -364,6 +448,34 @@ export class LoopwrightDB {
 
   listCheckpoints(worktreeId: number): CheckpointRow[] {
     return this.listCheckpointsStmt.all(worktreeId) as CheckpointRow[];
+  }
+
+  getWorktreeById(id: number): WorktreeRow | undefined {
+    return this.getWorktreeByIdStmt.get(id) as WorktreeRow | undefined;
+  }
+
+  listArtifactsByWorktree(worktreeId: number | string): ArtifactRow[] {
+    return this.listArtifactsByWorktreeStmt.all(String(worktreeId)) as ArtifactRow[];
+  }
+
+  insertComparison(input: ComparisonInsertInput): number {
+    const result = this.insertComparisonStmt.run(
+      input.worktree_a_id,
+      input.worktree_b_id,
+      JSON.stringify(input.json_report),
+      input.markdown_report,
+      input.created_at ?? isoNow(),
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getLatestComparisonForPair(worktreeAId: number, worktreeBId: number): ComparisonRow | undefined {
+    return this.getLatestComparisonForPairStmt.get(
+      worktreeAId,
+      worktreeBId,
+      worktreeBId,
+      worktreeAId,
+    ) as ComparisonRow | undefined;
   }
 }
 
