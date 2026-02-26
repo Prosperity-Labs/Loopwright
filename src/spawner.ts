@@ -5,6 +5,8 @@ export interface SpawnAgentOptions {
   worktreePath: string;
   prompt: string;
   agentType?: "claude" | "cursor" | "codex";
+  /** Model override for the spawned agent. Accepts aliases ("sonnet", "opus", "o3") or full model IDs. */
+  model?: string;
   dbPath: string;
   eventsPath: string;
   sessionId?: string;
@@ -28,15 +30,19 @@ function randomSuffix(): string {
   return Math.random().toString(36).slice(2, 6);
 }
 
-function buildCommand(agentType: NonNullable<SpawnAgentOptions["agentType"]>, prompt: string): string[] {
+function buildCommand(agentType: NonNullable<SpawnAgentOptions["agentType"]>, prompt: string, model?: string): string[] {
   switch (agentType) {
     case "cursor":
       return ["cursor", "--cli", prompt];
     case "codex":
       return ["codex", prompt];
     case "claude":
-    default:
-      return ["claude", "--print", prompt];
+    default: {
+      const cmd = ["claude", "--dangerously-skip-permissions", "--print", "--max-turns", "50"];
+      if (model) cmd.push("--model", model);
+      cmd.push(prompt);
+      return cmd;
+    }
   }
 }
 
@@ -76,7 +82,7 @@ export async function spawnAgent(options: SpawnAgentOptions): Promise<SpawnedAge
   const agentId = `agent-${agentType}-${Date.now()}-${randomSuffix()}`;
   const sessionId = options.sessionId ?? `session-${agentId}`;
   const startedAt = new Date().toISOString();
-  const cmd = options.commandOverride ?? buildCommand(agentType, options.prompt);
+  const cmd = options.commandOverride ?? buildCommand(agentType, options.prompt, options.model);
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string | undefined>),
@@ -114,6 +120,7 @@ export async function spawnAgent(options: SpawnAgentOptions): Promise<SpawnedAge
     session_id: sessionId,
     agent_id: agentId,
     agent_type: agentType,
+    model: options.model ?? null,
     worktree_path: options.worktreePath,
     worktree_id: options.worktreeId,
     db_path: options.dbPath,

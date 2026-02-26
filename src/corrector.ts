@@ -18,6 +18,8 @@ export interface CorrectorOptions {
   engramPythonPath?: string;
   maxCycles?: number;
   agentType?: "claude" | "cursor" | "codex";
+  /** Model override (claude only). Aliases: "sonnet", "haiku", "opus" or full model IDs. */
+  model?: string;
   project?: string;
   repoName?: string;
   /** Override the spawned agent command (for testing). */
@@ -204,6 +206,7 @@ export async function correctOrEscalate(options: CorrectorOptions): Promise<Corr
     worktreePath,
     prompt: "Read CLAUDE.md for the correction brief, then fix the errors described. Run tests to verify.",
     agentType: options.agentType ?? "claude",
+    model: options.model,
     dbPath,
     eventsPath,
     worktreeId,

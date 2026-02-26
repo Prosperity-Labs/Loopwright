@@ -13,6 +13,8 @@ export interface LoopOptions {
   baseBranch?: string;
   maxCycles?: number;
   agentType?: "claude" | "cursor" | "codex";
+  /** Model override (claude only). Aliases: "sonnet", "haiku", "opus" or full model IDs. */
+  model?: string;
   engramDbPath?: string;
   project?: string;
   logger?: Pick<Console, "log" | "warn" | "error">;
@@ -217,6 +219,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
         worktreePath,
         prompt,
         agentType: options.agentType ?? "claude",
+        model: options.model,
         dbPath,
         eventsPath,
         worktreeId,
