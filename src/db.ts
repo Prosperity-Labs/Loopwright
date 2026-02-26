@@ -109,6 +109,31 @@ export interface ComparisonRow {
   created_at: string;
 }
 
+export interface CorrectionCycleInsertInput {
+  worktree_id: number;
+  cycle_number: number;
+  trigger_error?: string | null;
+  error_context?: JsonValue;
+  checkpoint_id?: number | null;
+  agent_session_id?: string | null;
+  outcome?: "passed" | "failed" | "escalated" | null;
+  duration_seconds?: number | null;
+  created_at?: string;
+}
+
+export interface CorrectionCycleRow {
+  id: number;
+  worktree_id: number;
+  cycle_number: number;
+  trigger_error: string | null;
+  error_context: string | null;
+  checkpoint_id: number | null;
+  agent_session_id: string | null;
+  outcome: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+}
+
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -181,6 +206,21 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 
 CREATE INDEX IF NOT EXISTS idx_checkpoints_worktree ON checkpoints(worktree_id);
 
+CREATE TABLE IF NOT EXISTS correction_cycles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  worktree_id INTEGER NOT NULL REFERENCES worktrees(id),
+  cycle_number INTEGER NOT NULL,
+  trigger_error TEXT,
+  error_context TEXT,
+  checkpoint_id INTEGER REFERENCES checkpoints(id),
+  agent_session_id TEXT,
+  outcome TEXT CHECK(outcome IN ('passed','failed','escalated')),
+  duration_seconds INTEGER,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_correction_cycles_worktree ON correction_cycles(worktree_id);
+
 CREATE TABLE IF NOT EXISTS comparisons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   worktree_a_id INTEGER NOT NULL REFERENCES worktrees(id),
@@ -217,6 +257,10 @@ export class LoopwrightDB {
   private readonly listCheckpointsStmt;
   private readonly getWorktreeByIdStmt;
   private readonly listArtifactsByWorktreeStmt;
+  private readonly insertCorrectionCycleStmt;
+  private readonly getCorrectionCyclesStmt;
+  private readonly getCorrectionCycleCountStmt;
+  private readonly getLatestCorrectionCycleStmt;
   private readonly insertComparisonStmt;
   private readonly getLatestComparisonForPairStmt;
 
@@ -302,6 +346,37 @@ export class LoopwrightDB {
       FROM artifacts
       WHERE worktree_id = ?
       ORDER BY timestamp ASC, id ASC
+    `);
+
+    this.insertCorrectionCycleStmt = this.sqlite.prepare(`
+      INSERT INTO correction_cycles (
+        worktree_id, cycle_number, trigger_error, error_context, checkpoint_id,
+        agent_session_id, outcome, duration_seconds, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.getCorrectionCyclesStmt = this.sqlite.prepare(`
+      SELECT id, worktree_id, cycle_number, trigger_error, error_context, checkpoint_id,
+             agent_session_id, outcome, duration_seconds, created_at
+      FROM correction_cycles
+      WHERE worktree_id = ?
+      ORDER BY cycle_number ASC, id ASC
+    `);
+
+    this.getCorrectionCycleCountStmt = this.sqlite.prepare(`
+      SELECT COUNT(*) AS count
+      FROM correction_cycles
+      WHERE worktree_id = ?
+    `);
+
+    this.getLatestCorrectionCycleStmt = this.sqlite.prepare(`
+      SELECT id, worktree_id, cycle_number, trigger_error, error_context, checkpoint_id,
+             agent_session_id, outcome, duration_seconds, created_at
+      FROM correction_cycles
+      WHERE worktree_id = ?
+      ORDER BY cycle_number DESC, id DESC
+      LIMIT 1
     `);
 
     this.insertComparisonStmt = this.sqlite.prepare(`
@@ -456,6 +531,34 @@ export class LoopwrightDB {
 
   listArtifactsByWorktree(worktreeId: number | string): ArtifactRow[] {
     return this.listArtifactsByWorktreeStmt.all(String(worktreeId)) as ArtifactRow[];
+  }
+
+  insertCorrectionCycle(input: CorrectionCycleInsertInput): number {
+    const result = this.insertCorrectionCycleStmt.run(
+      input.worktree_id,
+      input.cycle_number,
+      input.trigger_error ?? null,
+      toJson(input.error_context),
+      input.checkpoint_id ?? null,
+      input.agent_session_id ?? null,
+      input.outcome ?? null,
+      input.duration_seconds ?? null,
+      input.created_at ?? isoNow(),
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getCorrectionCycles(worktreeId: number): CorrectionCycleRow[] {
+    return this.getCorrectionCyclesStmt.all(worktreeId) as CorrectionCycleRow[];
+  }
+
+  getCorrectionCycleCount(worktreeId: number): number {
+    const row = this.getCorrectionCycleCountStmt.get(worktreeId) as { count: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  getLatestCorrectionCycle(worktreeId: number): CorrectionCycleRow | undefined {
+    return this.getLatestCorrectionCycleStmt.get(worktreeId) as CorrectionCycleRow | undefined;
   }
 
   insertComparison(input: ComparisonInsertInput): number {
