@@ -14,6 +14,9 @@ const silentLogger: Pick<Console, "log" | "warn" | "error"> = {
   error() {},
 };
 
+// Mock agent that creates a file change (commit) so the loop doesn't escalate for no-change
+const MOCK_AGENT_WITH_CHANGES = ["bash", "-c", "echo x >> feature.ts && git add feature.ts && git commit -m feat"];
+
 afterEach(() => {
   registry.clear();
   while (tempPaths.length) {
@@ -47,7 +50,7 @@ test("Loop with passing agent returns passed", async () => {
     repoPath,
     dbPath,
     taskPrompt: "do nothing",
-    commandOverride: ["echo", "done"],
+    commandOverride: MOCK_AGENT_WITH_CHANGES,
     logger: silentLogger,
   });
 
@@ -77,7 +80,7 @@ test("Loop escalates after max cycles", async () => {
     dbPath,
     taskPrompt: "do nothing",
     maxCycles: 1,
-    commandOverride: ["echo", "fail"],
+    commandOverride: MOCK_AGENT_WITH_CHANGES,
     logger: silentLogger,
   });
 
@@ -105,7 +108,7 @@ test("Loop creates worktree and branch", async () => {
     repoPath,
     dbPath,
     taskPrompt: "noop",
-    commandOverride: ["echo", "done"],
+    commandOverride: MOCK_AGENT_WITH_CHANGES,
     logger: silentLogger,
   });
 
@@ -126,7 +129,7 @@ test("Loop records all cycles in result", async () => {
     dbPath,
     taskPrompt: "noop",
     maxCycles: 2,
-    commandOverride: ["echo", "agent-output"],
+    commandOverride: MOCK_AGENT_WITH_CHANGES,
     logger: silentLogger,
   });
 
@@ -135,6 +138,34 @@ test("Loop records all cycles in result", async () => {
   expect(result.cycles.length).toBe(3);
   expect(result.cycles.map((c) => c.action)).toEqual(["initial", "correction", "correction"]);
   expect(result.cycles.map((c) => c.cycleNumber)).toEqual([0, 1, 2]);
+});
+
+test("Loop escalates immediately when agent makes no changes", async () => {
+  const repoPath = await createBunTestRepo("pass");
+  const dbPath = join(repoPath, "sessions.db");
+
+  const result = await runLoop({
+    repoPath,
+    dbPath,
+    taskPrompt: "do nothing",
+    commandOverride: ["echo", "done"],
+    logger: silentLogger,
+  });
+
+  expect(result.status).toBe("escalated");
+  expect(result.totalCycles).toBe(0);
+  expect(result.cycles.length).toBe(1);
+  expect(result.cycles[0]?.action).toBe("initial");
+  expect(result.cycles[0]?.passed).toBe(true); // tests were skipped (no changes)
+  expect(result.finalCheckpoint).toBeUndefined();
+
+  const db = openLoopwrightDb(dbPath);
+  try {
+    const worktree = db.getWorktreeById(result.worktreeId);
+    expect(worktree?.status).toBe("escalated");
+  } finally {
+    db.close();
+  }
 });
 
 test("Loop cleans up DB on all exit paths", async () => {
@@ -152,7 +183,7 @@ test("Loop cleans up DB on all exit paths", async () => {
       repoPath: passRepo,
       dbPath: join(passRepo, "sessions.db"),
       taskPrompt: "noop",
-      commandOverride: ["echo", "done"],
+      commandOverride: MOCK_AGENT_WITH_CHANGES,
       logger: silentLogger,
     });
 
@@ -162,7 +193,7 @@ test("Loop cleans up DB on all exit paths", async () => {
       dbPath: join(failRepo, "sessions.db"),
       taskPrompt: "noop",
       maxCycles: 1,
-      commandOverride: ["echo", "fail"],
+      commandOverride: MOCK_AGENT_WITH_CHANGES,
       logger: silentLogger,
     });
   } finally {

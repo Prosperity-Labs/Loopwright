@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { create_checkpoint } from "./checkpoint.ts";
 import { writeCorrectionCycle } from "./correction-writer.ts";
@@ -16,9 +16,13 @@ export interface LoopOptions {
   /** Model override (claude only). Aliases: "sonnet", "haiku", "opus" or full model IDs. */
   model?: string;
   engramDbPath?: string;
+  /** Path to Engram source root (for PYTHONPATH). Falls back to ENGRAM_PATH env or auto-detect from engramDbPath. */
+  engramPath?: string;
   project?: string;
   logger?: Pick<Console, "log" | "warn" | "error">;
   commandOverride?: string[];
+  /** Override auto-detected test command (e.g. "pytest tests/" or "bun test src/"). */
+  testCommand?: string;
 }
 
 export interface LoopResult {
@@ -71,6 +75,48 @@ async function createGitWorktree(repoPath: string, worktreePath: string, branchN
   }
 }
 
+async function getGitSnapshot(cwd: string): Promise<string> {
+  const [head, status] = await Promise.all([
+    runCommand(cwd, ["git", "rev-parse", "HEAD"]),
+    runCommand(cwd, ["git", "status", "--porcelain", "-uno"]),
+  ]);
+  return `${head.stdout.trim()}|${status.stdout.trim()}`;
+}
+
+const ACTION_VERBS = /\b(add|edit|delete|move|create|update|fix|remove|rename|replace|insert|modify|write|change)\b/i;
+const MAX_PROMPT_WORDS = 50;
+
+/**
+ * Decompose a complex task prompt into the smallest actionable instruction.
+ *
+ * Complex prompts cause Claude Code to plan-without-acting in --print mode.
+ * This extracts the first concrete action (≤50 words, one action verb) so
+ * the agent edits files instead of describing what it would do.
+ */
+function focusPrompt(taskPrompt: string): string {
+  const words = taskPrompt.trim().split(/\s+/);
+  if (words.length <= MAX_PROMPT_WORDS) return taskPrompt.trim();
+
+  // Split into lines/sentences — try newlines first, then periods
+  const lines = taskPrompt
+    .split(/\n/)
+    .map((l) => l.replace(/^[\s\-*#>]+/, "").trim())
+    .filter((l) => l.length > 10);
+
+  // Find the first line containing an action verb
+  for (const line of lines) {
+    if (ACTION_VERBS.test(line)) {
+      const lineWords = line.split(/\s+/);
+      if (lineWords.length <= MAX_PROMPT_WORDS) return line;
+      return lineWords.slice(0, MAX_PROMPT_WORDS).join(" ");
+    }
+  }
+
+  // Fallback: first non-empty line, trimmed
+  const first = lines[0] ?? taskPrompt.trim();
+  return first.split(/\s+/).slice(0, MAX_PROMPT_WORDS).join(" ");
+}
+
 function buildTriggerError(testResult: TestResult): string {
   const first = testResult.errors[0];
   if (!first) return `Test failed with exit code ${testResult.exit_code}`;
@@ -116,8 +162,90 @@ function findEngramPython(worktreePath: string): string | undefined {
   return "python3";
 }
 
+/**
+ * Resolve the Engram source root for PYTHONPATH.
+ * Priority: explicit path → ENGRAM_PATH env → dirname(engramDbPath) if it contains engram/__init__.py.
+ */
+function resolveEngramPath(explicit?: string, engramDbPath?: string): string | undefined {
+  if (explicit) return resolve(explicit);
+
+  const envPath = process.env.ENGRAM_PATH;
+  if (envPath && existsSync(join(envPath, "engram", "__init__.py"))) return resolve(envPath);
+
+  if (engramDbPath) {
+    const candidate = dirname(resolve(engramDbPath));
+    if (existsSync(join(candidate, "engram", "__init__.py"))) return candidate;
+  }
+
+  return undefined;
+}
+
+function buildPythonEnv(engramPath: string | undefined): Record<string, string> | undefined {
+  if (!engramPath) return undefined;
+  const existing = process.env.PYTHONPATH;
+  return {
+    ...(process.env as Record<string, string>),
+    PYTHONPATH: existing ? `${engramPath}:${existing}` : engramPath,
+  };
+}
+
+async function generateProjectBrief(params: {
+  repoPath: string;
+  worktreePath: string;
+  engramDbPath: string;
+  engramPath?: string;
+  project?: string;
+  logger?: Pick<Console, "log" | "warn" | "error">;
+}): Promise<string | undefined> {
+  const logger = params.logger ?? console;
+  const pythonPath = findEngramPython(params.worktreePath) ?? findEngramPython(params.repoPath);
+
+  if (!pythonPath) return undefined;
+
+  const pyScript = `
+import sys
+try:
+    from engram.recall.session_db import SessionDB
+    from engram.recall.artifact_extractor import ArtifactExtractor
+    from engram.brief import generate_brief
+    db = SessionDB(sys.argv[1])
+    ArtifactExtractor(db)  # ensures artifacts table exists
+    project = sys.argv[2] if sys.argv[2] != "null" else None
+    brief = generate_brief(db=db, project=project or "default")
+    print(brief)
+except Exception as e:
+    print(str(e), file=sys.stderr)
+    sys.exit(2)
+`.trim();
+
+  try {
+    const pyEnv = buildPythonEnv(params.engramPath);
+    const proc = Bun.spawn({
+      cmd: [pythonPath, "-c", pyScript, params.engramDbPath, params.project ?? "null"],
+      stdout: "pipe",
+      stderr: "pipe",
+      ...(pyEnv ? { env: pyEnv } : {}),
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    if (exitCode === 0 && stdout.trim()) {
+      logger.log(`[loop] engram project brief generated (${stdout.trim().length} chars)`);
+      return stdout.trim();
+    }
+    logger.warn(`[loop] engram brief generation failed: ${stderr.trim() || `exit ${exitCode}`}`);
+  } catch (error) {
+    logger.warn("[loop] unable to run engram for project brief", error);
+  }
+
+  return undefined;
+}
+
 async function injectCorrectionBrief(params: {
   engramDbPath: string;
+  engramPath?: string;
   worktreeId: number;
   cycleNumber: number;
   triggerError: string;
@@ -145,17 +273,24 @@ async function injectCorrectionBrief(params: {
 import json, sys
 payload = json.loads(sys.argv[1])
 try:
+    from engram.recall.session_db import SessionDB
+    from engram.recall.artifact_extractor import ArtifactExtractor
     from engram.correction_brief import generate_correction_brief, inject_correction_brief
+    db = SessionDB(payload["engram_db_path"])
+    ArtifactExtractor(db)  # ensures artifacts table exists
     brief = generate_correction_brief(
-        engram_db_path=payload["engram_db_path"],
+        db=db,
         worktree_id=payload["worktree_id"],
         cycle_number=payload["cycle_number"],
         trigger_error=payload["trigger_error"],
         error_context=payload["error_context"],
-        worktree_path=payload["worktree_path"],
         project=payload.get("project"),
     )
-    inject_correction_brief(worktree_path=payload["worktree_path"], brief=brief)
+    inject_correction_brief(
+        worktree_path=payload["worktree_path"],
+        brief_content=brief,
+        cycle_number=payload["cycle_number"],
+    )
     print("ok")
 except Exception as e:
     print(str(e), file=sys.stderr)
@@ -163,10 +298,12 @@ except Exception as e:
 `.trim();
 
     try {
+      const pyEnv = buildPythonEnv(params.engramPath);
       const proc = Bun.spawn({
         cmd: [pythonPath, "-c", pyScript, JSON.stringify(payload)],
         stdout: "pipe",
         stderr: "pipe",
+        ...(pyEnv ? { env: pyEnv } : {}),
       });
       const [exitCode, stderr] = await Promise.all([
         proc.exited,
@@ -197,6 +334,12 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
 
   await createGitWorktree(repoPath, worktreePath, branchName, baseBranch);
 
+  const engramDbPath = options.engramDbPath ?? dbPath;
+  const engramPath = resolveEngramPath(options.engramPath, engramDbPath);
+  if (engramPath) {
+    logger.log(`[loop] engram source root: ${engramPath}`);
+  }
+
   const db = openLoopwrightDb(dbPath);
   let worktreeId = 0;
 
@@ -208,11 +351,22 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       task_description: options.taskPrompt,
     });
 
+    // Generate project brief from Engram for agent context
+    const projectBrief = await generateProjectBrief({
+      repoPath,
+      worktreePath,
+      engramDbPath,
+      engramPath,
+      project: options.project,
+      logger,
+    });
+
     const cycles: CycleResult[] = [];
 
     const runAgentAndWait = async (
       prompt: string,
       cycleLabel: string,
+      systemPrompt?: string,
     ): Promise<{ stdout: string; stderr: string; exit_code: number; duration_ms: number; sessionId: string }> => {
       const startMs = performance.now();
       const agent = await spawnAgent({
@@ -220,6 +374,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
         prompt,
         agentType: options.agentType ?? "claude",
         model: options.model,
+        systemPrompt,
         dbPath,
         eventsPath,
         worktreeId,
@@ -236,12 +391,22 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       const duration_ms = Math.round(performance.now() - startMs);
 
       logger.log(`[loop] ${cycleLabel}: agent finished (exit=${exit_code}, ${duration_ms}ms)`);
+
+      // Log agent output tail for debuggability
+      const tail = (s: string) => s.slice(-500).trim();
+      if (exit_code !== 0 || stdout.trim()) {
+        logger.log(`[loop] ${cycleLabel} stdout (last 500):\n${tail(stdout)}`);
+      }
+      if (stderr.trim()) {
+        logger.warn(`[loop] ${cycleLabel} stderr (last 500):\n${tail(stderr)}`);
+      }
+
       return { stdout, stderr, exit_code, duration_ms, sessionId: agent.sessionId };
     };
 
     const runTestsAndRecord = async (): Promise<TestResult> => {
       logger.log("[loop] running tests...");
-      const result = await runTests({ worktreePath, baseBranch });
+      const result = await runTests({ worktreePath, baseBranch, testCommand: options.testCommand });
       logger.log(`[loop] tests ${result.passed ? "PASSED" : "FAILED"} (${result.errors.length} errors, ${result.duration_ms}ms)`);
       return result;
     };
@@ -263,9 +428,17 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       };
     };
 
-    // Initial run
-    const initialRun = await runAgentAndWait(options.taskPrompt, "initial");
+    // Decompose complex prompts into a single actionable instruction.
+    // Complex prompts cause Claude Code --print to plan-without-acting.
+    const agentPrompt = focusPrompt(options.taskPrompt);
+    if (agentPrompt !== options.taskPrompt) {
+      logger.log(`[loop] prompt focused (${options.taskPrompt.split(/\s+/).length} → ${agentPrompt.split(/\s+/).length} words): ${agentPrompt}`);
+    }
+
+    // Initial run — pass project brief as system prompt for context
+    const initialRun = await runAgentAndWait(agentPrompt, "initial", projectBrief);
     const initialTests = await runTestsAndRecord();
+
     cycles.push({
       cycleNumber: 0,
       action: "initial",
@@ -274,6 +447,21 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       agentSessionId: initialRun.sessionId,
       duration_ms: initialRun.duration_ms + initialTests.duration_ms,
     });
+
+    // If the agent made zero changes, it failed to execute — escalate immediately
+    if (initialTests.changed_files.length === 0) {
+      logger.warn("[loop] initial agent made no file changes — escalating");
+      db.updateWorktreeStatus(worktreeId, "escalated", isoNow());
+      return {
+        status: "escalated",
+        worktreeId,
+        branchName,
+        worktreePath,
+        totalCycles: 0,
+        cycles,
+        duration_ms: Math.round(performance.now() - loopStart),
+      };
+    }
 
     if (initialTests.passed) {
       return await finishPassed(0);
@@ -301,7 +489,8 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       } satisfies Record<string, unknown>;
 
       await injectCorrectionBrief({
-        engramDbPath: options.engramDbPath ?? dbPath,
+        engramDbPath,
+        engramPath,
         worktreeId,
         cycleNumber,
         triggerError: buildTriggerError(lastTestResult),
@@ -313,7 +502,33 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
 
       const correctionPrompt =
         "Read CLAUDE.md for the correction brief. Fix the errors described. Run tests to verify your fix.";
+      const snapshotBefore = await getGitSnapshot(worktreePath);
       const corrRun = await runAgentAndWait(correctionPrompt, `correction-${cycleNumber}`);
+      const snapshotAfter = await getGitSnapshot(worktreePath);
+
+      // If correction agent made no changes, escalate rather than burning another cycle
+      if (snapshotBefore === snapshotAfter) {
+        logger.warn(`[loop] correction-${cycleNumber}: agent made no changes — escalating`);
+        cycles.push({
+          cycleNumber,
+          action: "correction",
+          testResult: lastTestResult,
+          passed: false,
+          agentSessionId: corrRun.sessionId,
+          duration_ms: corrRun.duration_ms,
+        });
+        db.updateWorktreeStatus(worktreeId, "escalated", isoNow());
+        return {
+          status: "escalated",
+          worktreeId,
+          branchName,
+          worktreePath,
+          totalCycles: cycleNumber,
+          cycles,
+          duration_ms: Math.round(performance.now() - loopStart),
+        };
+      }
+
       const corrTests = await runTestsAndRecord();
 
       cycles.push({
@@ -341,6 +556,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       duration_ms: Math.round(performance.now() - loopStart),
     };
   } catch (error) {
+    logger.error(`[loop] FATAL ERROR:`, error);
     if (worktreeId > 0) {
       try {
         db.updateWorktreeStatus(worktreeId, "failed", isoNow());

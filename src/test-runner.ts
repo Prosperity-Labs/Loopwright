@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 
 export interface TestRunnerOptions {
   worktreePath: string;
@@ -45,12 +45,13 @@ function linesTail(text: string, maxLines = 50): string {
   return lines.slice(-maxLines).join("\n").trim();
 }
 
-async function runCommand(cwd: string, cmd: string[], timeoutMs: number): Promise<CommandResult> {
+async function runCommand(cwd: string, cmd: string[], timeoutMs: number, env?: Record<string, string>): Promise<CommandResult> {
   const proc = Bun.spawn({
     cmd,
     cwd,
     stdout: "pipe",
     stderr: "pipe",
+    ...(env ? { env } : {}),
   });
 
   let timedOut = false;
@@ -135,6 +136,79 @@ function detectFramework(worktreePath: string): "bun" | "pytest" | undefined {
   const setupCfgPath = join(worktreePath, "setup.cfg");
   if (existsSync(setupCfgPath) && readFileSync(setupCfgPath, "utf8").includes("[tool:pytest]")) {
     return "pytest";
+  }
+
+  // Fallback: pyproject.toml + tests/ dir with test_*.py files → assume pytest
+  if (existsSync(pyprojectPath) && existsSync(join(worktreePath, "tests"))) {
+    try {
+      const entries = readdirSync(join(worktreePath, "tests"));
+      if (entries.some(e => e.startsWith("test_") && e.endsWith(".py"))) return "pytest";
+    } catch { /* ignore */ }
+  }
+
+  // Also check for conftest.py at root
+  if (existsSync(join(worktreePath, "conftest.py"))) return "pytest";
+
+  return undefined;
+}
+
+/**
+ * Find the real repo root for a git worktree (the parent repo where .venv likely lives).
+ */
+function findRepoRoot(worktreePath: string): string | undefined {
+  const gitCommonDir = join(worktreePath, ".git");
+  try {
+    // For worktrees, .git is a file containing "gitdir: /path/to/parent/.git/worktrees/..."
+    const content = readFileSync(gitCommonDir, "utf8").trim();
+    if (content.startsWith("gitdir:")) {
+      const gitdir = content.slice("gitdir:".length).trim();
+      // Walk up from .git/worktrees/<name> to the repo root
+      const resolved = resolve(worktreePath, gitdir);
+      // .git/worktrees/<name> → two levels up from worktrees dir gives repo .git, one more gives repo root
+      const dotGit = dirname(dirname(resolved));
+      const repoRoot = dirname(dotGit);
+      if (existsSync(join(repoRoot, ".git"))) return repoRoot;
+    }
+  } catch {
+    // Not a worktree or .git is a directory — that's fine
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the test binary to a venv-aware absolute path.
+ * Checks worktreePath/.venv/bin/<bin>, then the parent repo root/.venv/bin/<bin>.
+ */
+export function detectTestBin(worktreePath: string, framework: "bun" | "pytest"): string {
+  if (framework === "bun") return "bun";
+
+  const bin = "pytest";
+  // Check worktree-local venv first
+  const localVenv = join(worktreePath, ".venv", "bin", bin);
+  if (existsSync(localVenv)) return localVenv;
+
+  // Check parent repo root (for git worktrees, the venv is in the main repo)
+  const repoRoot = findRepoRoot(worktreePath);
+  if (repoRoot) {
+    const parentVenv = join(repoRoot, ".venv", "bin", bin);
+    if (existsSync(parentVenv)) return parentVenv;
+  }
+
+  return bin; // fallback to bare command
+}
+
+/**
+ * Find the venv bin directory for PATH extension.
+ * Checks worktreePath/.venv/bin, then parent repo root/.venv/bin.
+ */
+export function findVenvBinDir(worktreePath: string): string | undefined {
+  const localVenv = join(worktreePath, ".venv", "bin");
+  if (existsSync(localVenv)) return localVenv;
+
+  const repoRoot = findRepoRoot(worktreePath);
+  if (repoRoot) {
+    const parentVenv = join(repoRoot, ".venv", "bin");
+    if (existsSync(parentVenv)) return parentVenv;
   }
 
   return undefined;
@@ -265,6 +339,21 @@ export async function runTests(options: TestRunnerOptions): Promise<TestResult> 
   const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
   const changedFiles = await detectChangedFiles(options.worktreePath, options.baseBranch ?? DEFAULT_BASE_BRANCH);
 
+  // If the agent made no changes and no explicit test command was given, skip testing.
+  // The agent cannot have broken anything if it changed nothing.
+  if (changedFiles.length === 0 && !options.testCommand) {
+    return {
+      passed: true,
+      exit_code: 0,
+      test_command: "(skipped — no files changed)",
+      changed_files: [],
+      errors: [],
+      stdout_tail: "",
+      stderr_tail: "",
+      duration_ms: Math.round(performance.now() - startedAt),
+    };
+  }
+
   const framework = detectFramework(options.worktreePath);
   let commandText = options.testCommand?.trim();
 
@@ -272,7 +361,8 @@ export async function runTests(options: TestRunnerOptions): Promise<TestResult> 
     if (framework === "bun") {
       commandText = "bun test";
     } else if (framework === "pytest") {
-      commandText = "pytest";
+      const pytestBin = detectTestBin(options.worktreePath, "pytest");
+      commandText = pytestBin;
     } else {
       throw new Error("Unable to auto-detect test framework and no testCommand was provided");
     }
@@ -281,18 +371,29 @@ export async function runTests(options: TestRunnerOptions): Promise<TestResult> 
   const scopedTargets =
     commandText.startsWith("bun test")
       ? collectBunScopedTests(options.worktreePath, changedFiles)
-      : commandText.startsWith("pytest")
+      : commandText.includes("pytest")
         ? collectPytestScopedTests(options.worktreePath, changedFiles)
         : [];
 
   const cmd = [...splitCommand(commandText), ...scopedTargets];
-  const exec = await runCommand(options.worktreePath, cmd, timeout);
+
+  // Extend PATH with venv bin for pytest execution
+  let execEnv: Record<string, string> | undefined;
+  const venvBin = findVenvBinDir(options.worktreePath);
+  if (venvBin) {
+    execEnv = {
+      ...(process.env as Record<string, string>),
+      PATH: `${venvBin}:${process.env.PATH ?? ""}`,
+    };
+  }
+
+  const exec = await runCommand(options.worktreePath, cmd, timeout, execEnv);
   const stderrWithTimeout = exec.timedOut ? `${exec.stderr}\nTimed out after ${timeout}ms`.trim() : exec.stderr;
 
   let errors: TestError[] = [];
   if (commandText.startsWith("bun test")) {
     errors = parseBunTestErrors(exec.stdout, stderrWithTimeout);
-  } else if (commandText.startsWith("pytest")) {
+  } else if (commandText.includes("pytest")) {
     errors = parsePytestErrors(exec.stdout, stderrWithTimeout);
   }
 
