@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loopwright | Autonomous Loop Dashboard</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg: #030303;
+            --bg-raised: #0a0a0a;
+            --bg-card: rgba(255,255,255,0.02);
+            --fg: #ffffff;
+            --fg-dim: #cccccc;
+            --muted: #666666;
+            --accent: #6f7cff;
+            --accent-glow: rgba(111, 124, 255, 0.4);
+            --accent-dim: rgba(111, 124, 255, 0.15);
+            --green: #30d158;
+            --green-glow: rgba(48, 209, 88, 0.3);
+            --red: #ff453a;
+            --red-glow: rgba(255, 69, 58, 0.3);
+            --amber: #ffd60a;
+            --amber-glow: rgba(255, 214, 10, 0.3);
+            --border: rgba(255,255,255,0.06);
+            --border-accent: rgba(111, 124, 255, 0.2);
+            --radius: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image:
+                linear-gradient(to right, rgba(255,255,255,0.012) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255,255,255,0.012) 1px, transparent 1px);
+            background-size: 48px 48px;
+            background-position: center top;
+        }
+
+        ::selection {
+            background: rgba(111, 124, 255, 0.3);
+            color: #fff;
+        }
+
+        /* ═══════════════════ HEADER ═══════════════════ */
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 2rem;
+            height: 56px;
+            background: rgba(3, 3, 3, 0.85);
+            backdrop-filter: blur(20px) saturate(1.2);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 1.05rem;
+            letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-icon {
+            width: 22px;
+            height: 22px;
+            border-radius: 6px;
+            background: linear-gradient(135deg, var(--accent), #9f6fff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            box-shadow: 0 0 16px var(--accent-glow);
+        }
+
+        .logo-icon svg {
+            width: 14px;
+            height: 14px;
+            fill: white;
+        }
+
+        .status-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            padding: 0.3rem 0.7rem;
+            border-radius: 100px;
+            border: 1px solid;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .status-badge .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-idle { border-color: var(--border); color: var(--muted); }
+        .status-idle .dot { background: var(--muted); }
+
+        .status-running { border-color: var(--accent-dim); color: var(--accent); }
+        .status-running .dot { background: var(--accent); animation: pulse-dot 1.5s ease-in-out infinite; }
+
+        .status-passed { border-color: rgba(48,209,88,0.3); color: var(--green); }
+        .status-passed .dot { background: var(--green); }
+
+        .status-failed { border-color: rgba(255,69,58,0.3); color: var(--red); }
+        .status-failed .dot { background: var(--red); }
+
+        .status-escalated { border-color: rgba(255,214,10,0.3); color: var(--amber); }
+        .status-escalated .dot { background: var(--amber); }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.7); }
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .timer {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--muted);
+            letter-spacing: 0.02em;
+        }
+
+        .timer.active { color: var(--fg-dim); }
+
+        .cycle-indicator {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--muted);
+            padding: 0.25rem 0.6rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        /* ═══════════════════ PIPELINE ═══════════════════ */
+        .pipeline-section {
+            padding: 2.5rem 2rem 1.5rem;
+            position: relative;
+        }
+
+        .pipeline-section::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 50vw;
+            height: 30vw;
+            background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 65%);
+            opacity: 0.06;
+            filter: blur(60px);
+            pointer-events: none;
+        }
+
+        .pipeline {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            max-width: 960px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 2;
+        }
+
+        .pipe-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.6rem;
+            position: relative;
+        }
+
+        .pipe-node-circle {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            background: var(--bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+        }
+
+        .pipe-node-circle svg {
+            width: 20px;
+            height: 20px;
+            stroke: var(--muted);
+            fill: none;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            transition: stroke 0.4s;
+        }
+
+        .pipe-node-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--muted);
+            transition: color 0.4s;
+        }
+
+        /* Active state */
+        .pipe-node.active .pipe-node-circle {
+            border-color: var(--accent);
+            background: rgba(111, 124, 255, 0.08);
+            box-shadow: 0 0 24px var(--accent-glow), 0 0 48px rgba(111, 124, 255, 0.12);
+        }
+
+        .pipe-node.active .pipe-node-circle svg { stroke: var(--accent); }
+        .pipe-node.active .pipe-node-label { color: var(--accent); }
+
+        .pipe-node.active .pipe-node-circle::after {
+            content: '';
+            position: absolute;
+            inset: -6px;
+            border-radius: 50%;
+            border: 1px solid rgba(111, 124, 255, 0.2);
+            animation: ring-pulse 2s ease-out infinite;
+        }
+
+        @keyframes ring-pulse {
+            0% { transform: scale(1); opacity: 0.6; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+
+        /* Completed state */
+        .pipe-node.completed .pipe-node-circle {
+            border-color: rgba(48, 209, 88, 0.4);
+            background: rgba(48, 209, 88, 0.06);
+        }
+        .pipe-node.completed .pipe-node-circle svg { stroke: var(--green); }
+        .pipe-node.completed .pipe-node-label { color: rgba(48, 209, 88, 0.7); }
+
+        /* Failed state */
+        .pipe-node.failed .pipe-node-circle {
+            border-color: rgba(255, 69, 58, 0.4);
+            background: rgba(255, 69, 58, 0.06);
+        }
+        .pipe-node.failed .pipe-node-circle svg { stroke: var(--red); }
+        .pipe-node.failed .pipe-node-label { color: rgba(255, 69, 58, 0.7); }
+
+        /* Connector lines */
+        .pipe-connector {
+            width: 56px;
+            height: 2px;
+            background: var(--border);
+            position: relative;
+            margin-bottom: 1.6rem;
+            transition: background 0.5s;
+        }
+
+        .pipe-connector.active {
+            background: linear-gradient(90deg, var(--accent), rgba(111, 124, 255, 0.3));
+        }
+
+        .pipe-connector.active::after {
+            content: '';
+            position: absolute;
+            top: -1px;
+            left: 0;
+            width: 12px;
+            height: 4px;
+            background: var(--accent);
+            border-radius: 2px;
+            box-shadow: 0 0 8px var(--accent-glow);
+            animation: flow-particle 1.5s linear infinite;
+        }
+
+        @keyframes flow-particle {
+            0% { left: 0; opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { left: calc(100% - 12px); opacity: 0; }
+        }
+
+        /* Branch indicator */
+        .pipe-branch {
+            display: flex;
+            align-items: flex-start;
+            gap: 0;
+            position: relative;
+        }
+
+        .branch-split {
+            width: 24px;
+            height: 60px;
+            position: relative;
+            margin-bottom: 1.6rem;
+        }
+
+        .branch-split svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .branch-split svg line, .branch-split svg path {
+            stroke: var(--border);
+            stroke-width: 2;
+            fill: none;
+        }
+
+        /* Correction loop arc */
+        .correction-arc {
+            position: absolute;
+            bottom: -28px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 280px;
+            height: 32px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+
+        .correction-arc.visible { opacity: 1; }
+
+        .correction-arc svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .correction-arc svg path {
+            fill: none;
+            stroke: var(--amber);
+            stroke-width: 1.5;
+            stroke-dasharray: 6 4;
+            opacity: 0.5;
+        }
+
+        .correction-arc-label {
+            position: absolute;
+            bottom: -18px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            color: var(--amber);
+            opacity: 0.7;
+            white-space: nowrap;
+        }
+
+        /* ═══════════════════ MAIN CONTENT ═══════════════════ */
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 1px;
+            background: var(--border);
+            margin: 0;
+            min-height: calc(100vh - 56px - 140px);
+        }
+
+        /* ═══════════════════ LIVE FEED ═══════════════════ */
+        .feed-panel {
+            background: var(--bg);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-title {
+            font-size: 0.7rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--muted);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .panel-title .live-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+
+        .feed-scroll {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.08) transparent;
+        }
+
+        .feed-item {
+            display: grid;
+            grid-template-columns: 20px 1fr auto;
+            gap: 0.75rem;
+            align-items: start;
+            padding: 0.65rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            animation: feed-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes feed-in {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .feed-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-top: 1px;
+        }
+
+        .feed-icon.spawn { color: var(--accent); }
+        .feed-icon.test-pass { color: var(--green); }
+        .feed-icon.test-fail { color: var(--red); }
+        .feed-icon.correct { color: var(--amber); }
+        .feed-icon.checkpoint { color: var(--green); }
+        .feed-icon.info { color: var(--muted); }
+        .feed-icon.escalate { color: var(--red); }
+
+        .feed-text {
+            font-size: 0.82rem;
+            line-height: 1.45;
+            color: var(--fg-dim);
+        }
+
+        .feed-text strong {
+            color: var(--fg);
+            font-weight: 500;
+        }
+
+        .feed-text code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            background: rgba(255,255,255,0.05);
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            color: var(--accent);
+        }
+
+        .feed-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--muted);
+            white-space: nowrap;
+            margin-top: 2px;
+        }
+
+        /* ═══════════════════ STATS PANEL ═══════════════════ */
+        .stats-panel {
+            background: var(--bg);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            border-left: 1px solid var(--border);
+        }
+
+        .stat-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-group-title {
+            font-size: 0.6rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--muted);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stat-label {
+            font-size: 0.78rem;
+            color: var(--muted);
+        }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--fg-dim);
+            text-align: right;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .stat-value.mono { font-family: 'JetBrains Mono', monospace; }
+
+        .task-prompt {
+            font-size: 0.82rem;
+            color: var(--fg-dim);
+            line-height: 1.5;
+            padding: 0.75rem;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-style: italic;
+            max-height: 80px;
+            overflow: hidden;
+        }
+
+        .changed-files {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        .file-chip {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            padding: 0.2rem 0.45rem;
+            background: rgba(111, 124, 255, 0.08);
+            border: 1px solid rgba(111, 124, 255, 0.15);
+            border-radius: 4px;
+            color: var(--accent);
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--border);
+        }
+
+        /* ═══════════════════ CYCLE HISTORY ═══════════════════ */
+        .cycle-section {
+            padding: 1.5rem 2rem 2rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .cycles-row {
+            display: flex;
+            gap: 1rem;
+            overflow-x: auto;
+            padding-bottom: 0.5rem;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.08) transparent;
+        }
+
+        .cycle-card {
+            min-width: 240px;
+            max-width: 280px;
+            flex-shrink: 0;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            background: var(--bg-card);
+            backdrop-filter: blur(8px);
+            transition: border-color 0.3s, transform 0.3s;
+            animation: card-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+        }
+
+        .cycle-card:hover {
+            border-color: var(--border-accent);
+            transform: translateY(-2px);
+        }
+
+        @keyframes card-in {
+            from { opacity: 0; transform: translateY(12px) scale(0.97); }
+        }
+
+        .cycle-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .cycle-card-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .cycle-card-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .badge-passed { background: rgba(48,209,88,0.12); color: var(--green); }
+        .badge-failed { background: rgba(255,69,58,0.12); color: var(--red); }
+        .badge-running { background: rgba(111,124,255,0.12); color: var(--accent); }
+
+        .cycle-card-detail {
+            font-size: 0.75rem;
+            color: var(--muted);
+            line-height: 1.5;
+            margin-bottom: 0.25rem;
+        }
+
+        .cycle-card-detail span {
+            color: var(--fg-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+        }
+
+        .cycle-error {
+            margin-top: 0.5rem;
+            padding: 0.5rem;
+            background: rgba(255, 69, 58, 0.05);
+            border: 1px solid rgba(255, 69, 58, 0.12);
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--red);
+            line-height: 1.4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ═══════════════════ EMPTY STATE ═══════════════════ */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 4rem 2rem;
+            color: var(--muted);
+            gap: 1rem;
+        }
+
+        .empty-state-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            border: 2px dashed rgba(255,255,255,0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            opacity: 0.4;
+        }
+
+        .empty-state-text {
+            font-size: 0.85rem;
+            text-align: center;
+            line-height: 1.6;
+        }
+
+        .empty-state-text code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            background: rgba(255,255,255,0.05);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            color: var(--fg-dim);
+        }
+
+        /* ═══════════════════ SCROLLBAR ═══════════════════ */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+        /* ═══════════════════ RESPONSIVE ═══════════════════ */
+        @media (max-width: 860px) {
+            .main-content { grid-template-columns: 1fr; }
+            .stats-panel { border-left: none; border-top: 1px solid var(--border); }
+            .pipeline { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ═══════════ HEADER ═══════════ -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                Loopwright
+            </div>
+            <div id="statusBadge" class="status-badge status-idle">
+                <span class="dot"></span>
+                <span id="statusText">idle</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div id="cycleIndicator" class="cycle-indicator" style="display:none">
+                Cycle <span id="cycleNum">0</span>/<span id="cycleMax">3</span>
+            </div>
+            <div id="timer" class="timer">00:00</div>
+        </div>
+    </header>
+
+    <!-- ═══════════ PIPELINE ═══════════ -->
+    <section class="pipeline-section">
+        <div class="pipeline" id="pipeline">
+            <div class="pipe-node" data-phase="spawn" id="node-spawn">
+                <div class="pipe-node-circle">
+                    <svg viewBox="0 0 24 24"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+                </div>
+                <span class="pipe-node-label">Spawn</span>
+            </div>
+
+            <div class="pipe-connector" id="conn-spawn-test"></div>
+
+            <div class="pipe-node" data-phase="test" id="node-test">
+                <div class="pipe-node-circle">
+                    <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><path d="M9 5a2 2 0 012-2h2a2 2 0 012 2v0a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/><path d="M9 14l2 2 4-4"/></svg>
+                </div>
+                <span class="pipe-node-label">Test</span>
+            </div>
+
+            <div class="pipe-connector" id="conn-test-pass"></div>
+
+            <div class="pipe-node" data-phase="checkpoint" id="node-checkpoint">
+                <div class="pipe-node-circle">
+                    <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+                </div>
+                <span class="pipe-node-label">Checkpoint</span>
+            </div>
+
+            <div style="width: 40px; margin-bottom: 1.6rem;"></div>
+
+            <div class="pipe-node" data-phase="correct" id="node-correct">
+                <div class="pipe-node-circle">
+                    <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </div>
+                <span class="pipe-node-label">Correct</span>
+            </div>
+        </div>
+
+        <div class="correction-arc" id="correctionArc">
+            <svg viewBox="0 0 280 32" preserveAspectRatio="none">
+                <path d="M 20 2 Q 140 60 260 2" />
+            </svg>
+            <span class="correction-arc-label" id="arcLabel">correction cycle</span>
+        </div>
+    </section>
+
+    <!-- ═══════════ MAIN CONTENT ═══════════ -->
+    <div class="main-content">
+        <!-- Live Feed -->
+        <div class="feed-panel">
+            <div class="panel-title">
+                <span class="live-dot" id="liveDot"></span>
+                Live Feed
+            </div>
+            <div class="feed-scroll" id="feedScroll">
+                <div class="empty-state" id="feedEmpty">
+                    <div class="empty-state-icon">&#x21BB;</div>
+                    <div class="empty-state-text">
+                        Waiting for loop to start...<br>
+                        <code>bun run src/loop.ts &lt;prompt&gt; &lt;repo&gt;</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Panel -->
+        <div class="stats-panel">
+            <div class="panel-title">Details</div>
+
+            <div class="stat-group">
+                <div class="stat-group-title">Task</div>
+                <div class="task-prompt" id="taskPrompt">No active task</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="stat-group">
+                <div class="stat-group-title">Target</div>
+                <div class="stat-row">
+                    <span class="stat-label">Repository</span>
+                    <span class="stat-value" id="statRepo">&mdash;</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Branch</span>
+                    <span class="stat-value mono" id="statBranch">&mdash;</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Worktree</span>
+                    <span class="stat-value mono" id="statWorktree">&mdash;</span>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="stat-group">
+                <div class="stat-group-title">Progress</div>
+                <div class="stat-row">
+                    <span class="stat-label">Cycle</span>
+                    <span class="stat-value" id="statCycle">0 / 3</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tests</span>
+                    <span class="stat-value" id="statTests">&mdash;</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Errors</span>
+                    <span class="stat-value" id="statErrors">&mdash;</span>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="stat-group">
+                <div class="stat-group-title">Changed Files</div>
+                <div class="changed-files" id="changedFiles">
+                    <span class="stat-label">&mdash;</span>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="stat-group">
+                <div class="stat-group-title">Result</div>
+                <div class="stat-row">
+                    <span class="stat-label">Git SHA</span>
+                    <span class="stat-value mono" id="statSha">&mdash;</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ CYCLE HISTORY ═══════════ -->
+    <section class="cycle-section">
+        <div class="panel-title" style="margin-bottom: 1rem;">Cycle History</div>
+        <div class="cycles-row" id="cyclesRow">
+            <div class="empty-state" style="padding: 2rem; width: 100%;" id="cycleEmpty">
+                <div class="empty-state-text" style="font-size: 0.78rem;">Cycles will appear here as the loop progresses</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════ JAVASCRIPT ═══════════ -->
+    <script>
+    (function() {
+        'use strict';
+
+        // ──── State ────
+        let state = {
+            status: 'idle',
+            phase: null,
+            cycle: 0,
+            maxCycles: 3,
+            startTime: null,
+            taskPrompt: '',
+            repo: '',
+            branch: '',
+            worktreePath: '',
+            events: [],
+            cycles: [],
+            changedFiles: [],
+            gitSha: null,
+            testsPassed: null,
+            testsFailed: null,
+        };
+
+        // ──── DOM refs ────
+        const $ = id => document.getElementById(id);
+        const statusBadge = $('statusBadge');
+        const statusText = $('statusText');
+        const timer = $('timer');
+        const cycleIndicator = $('cycleIndicator');
+        const cycleNum = $('cycleNum');
+        const cycleMax = $('cycleMax');
+        const feedScroll = $('feedScroll');
+        const feedEmpty = $('feedEmpty');
+        const cyclesRow = $('cyclesRow');
+        const cycleEmpty = $('cycleEmpty');
+        const liveDot = $('liveDot');
+
+        // ──── Timer ────
+        let timerInterval = null;
+
+        function startTimer() {
+            state.startTime = Date.now();
+            timer.classList.add('active');
+            timerInterval = setInterval(updateTimer, 1000);
+        }
+
+        function stopTimer() {
+            clearInterval(timerInterval);
+        }
+
+        function updateTimer() {
+            if (!state.startTime) return;
+            const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+            const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+            const s = String(elapsed % 60).padStart(2, '0');
+            timer.textContent = `${m}:${s}`;
+        }
+
+        // ──── Status ────
+        function setStatus(status) {
+            state.status = status;
+            statusBadge.className = `status-badge status-${status}`;
+            statusText.textContent = status;
+        }
+
+        // ──── Pipeline ────
+        function setPhase(phase) {
+            state.phase = phase;
+            const nodes = document.querySelectorAll('.pipe-node');
+            const phases = ['spawn', 'test', 'checkpoint', 'correct'];
+
+            nodes.forEach(n => {
+                n.classList.remove('active', 'completed', 'failed');
+            });
+
+            if (!phase) return;
+
+            const nodeEl = $(`node-${phase}`);
+            if (nodeEl) nodeEl.classList.add('active');
+
+            // Activate connectors
+            const connSpawnTest = $('conn-spawn-test');
+            const connTestPass = $('conn-test-pass');
+
+            if (phase === 'test' || phase === 'checkpoint' || phase === 'correct') {
+                connSpawnTest.classList.add('active');
+                $('node-spawn').classList.add('completed');
+            }
+            if (phase === 'checkpoint') {
+                connTestPass.classList.add('active');
+                $('node-test').classList.add('completed');
+            }
+        }
+
+        function showCorrectionArc(visible, label) {
+            const arc = $('correctionArc');
+            const arcLabel = $('arcLabel');
+            arc.classList.toggle('visible', visible);
+            if (label) arcLabel.textContent = label;
+        }
+
+        // ──── Feed ────
+        const feedIcons = {
+            spawn:      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83"/></svg>',
+            'test-pass':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>',
+            'test-fail':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6m0-6l6 6"/></svg>',
+            correct:    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+            checkpoint: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8m0-16v5h8"/></svg>',
+            info:       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4m0-4h.01"/></svg>',
+            escalate:   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4m0 4h.01"/></svg>',
+        };
+
+        function addFeedItem(type, html, time) {
+            if (feedEmpty) feedEmpty.remove();
+            const item = document.createElement('div');
+            item.className = 'feed-item';
+            item.innerHTML = `
+                <div class="feed-icon ${type}">${feedIcons[type] || feedIcons.info}</div>
+                <div class="feed-text">${html}</div>
+                <div class="feed-time">${time || formatTime(new Date())}</div>
+            `;
+            feedScroll.appendChild(item);
+            feedScroll.scrollTop = feedScroll.scrollHeight;
+        }
+
+        function formatTime(d) {
+            return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        // ──── Cycles ────
+        function addCycleCard(cycle) {
+            if (cycleEmpty) cycleEmpty.remove();
+            const card = document.createElement('div');
+            card.className = 'cycle-card';
+            card.style.animationDelay = `${cycle.cycleNumber * 0.1}s`;
+
+            const badgeClass = cycle.passed ? 'badge-passed' : (cycle.action === 'initial' && !cycle.passed ? 'badge-failed' : 'badge-failed');
+            const badgeText = cycle.passed ? 'PASSED' : 'FAILED';
+
+            let errorHtml = '';
+            if (!cycle.passed && cycle.testResult && cycle.testResult.errors && cycle.testResult.errors.length > 0) {
+                const err = cycle.testResult.errors[0];
+                errorHtml = `<div class="cycle-error">${err.type}: ${err.message} at ${err.file}:${err.line || '?'}</div>`;
+            }
+
+            card.innerHTML = `
+                <div class="cycle-card-header">
+                    <span class="cycle-card-title">${cycle.action === 'initial' ? 'Initial' : 'Correction ' + cycle.cycleNumber}</span>
+                    <span class="cycle-card-badge ${badgeClass}">${badgeText}</span>
+                </div>
+                <div class="cycle-card-detail">Duration: <span>${(cycle.duration_ms / 1000).toFixed(1)}s</span></div>
+                <div class="cycle-card-detail">Errors: <span>${cycle.testResult ? cycle.testResult.errors.length : 0}</span></div>
+                ${errorHtml}
+            `;
+            cyclesRow.appendChild(card);
+        }
+
+        // ──── Stats ────
+        function updateStats() {
+            $('taskPrompt').textContent = state.taskPrompt || 'No active task';
+            $('statRepo').textContent = state.repo || '\u2014';
+            $('statBranch').textContent = state.branch || '\u2014';
+            $('statWorktree').textContent = state.worktreePath ? '...' + state.worktreePath.slice(-40) : '\u2014';
+            $('statCycle').textContent = `${state.cycle} / ${state.maxCycles}`;
+
+            if (state.testsPassed !== null || state.testsFailed !== null) {
+                const p = state.testsPassed || 0;
+                const f = state.testsFailed || 0;
+                $('statTests').innerHTML = `<span style="color:var(--green)">${p} pass</span> / <span style="color:var(--red)">${f} fail</span>`;
+            }
+
+            $('statErrors').textContent = state.testsFailed != null ? state.testsFailed : '\u2014';
+            $('statSha').textContent = state.gitSha ? state.gitSha.slice(0, 8) : '\u2014';
+
+            if (state.changedFiles.length > 0) {
+                $('changedFiles').innerHTML = state.changedFiles.map(f =>
+                    `<span class="file-chip">${f.split('/').pop()}</span>`
+                ).join('');
+            }
+
+            cycleNum.textContent = state.cycle;
+            cycleMax.textContent = state.maxCycles;
+            if (state.status === 'running') {
+                cycleIndicator.style.display = '';
+            }
+        }
+
+        // ──── SSE ────
+        function connectSSE() {
+            const evtSource = new EventSource('/api/stream');
+
+            evtSource.addEventListener('status', (e) => {
+                const data = JSON.parse(e.data);
+                if (data.status === 'running' && state.status !== 'running') {
+                    startTimer();
+                }
+                if (data.status !== 'running' && state.status === 'running') {
+                    stopTimer();
+                }
+                setStatus(data.status);
+                if (data.phase) setPhase(data.phase);
+                if (data.taskPrompt) state.taskPrompt = data.taskPrompt;
+                if (data.repo) state.repo = data.repo;
+                if (data.branch) state.branch = data.branch;
+                if (data.worktreePath) state.worktreePath = data.worktreePath;
+                if (data.maxCycles) state.maxCycles = data.maxCycles;
+                if (data.cycle !== undefined) state.cycle = data.cycle;
+                if (data.gitSha) state.gitSha = data.gitSha;
+                updateStats();
+            });
+
+            evtSource.addEventListener('event', (e) => {
+                const data = JSON.parse(e.data);
+                addFeedItem(data.type || 'info', data.html || data.message, data.time);
+
+                if (data.phase) setPhase(data.phase);
+
+                if (data.testResult) {
+                    const tr = data.testResult;
+                    state.testsPassed = tr.passed_count || 0;
+                    state.testsFailed = tr.errors ? tr.errors.length : 0;
+                    if (tr.changed_files) state.changedFiles = tr.changed_files;
+                    updateStats();
+                }
+
+                if (data.correctionArc) {
+                    showCorrectionArc(true, data.correctionArc);
+                }
+            });
+
+            evtSource.addEventListener('cycle', (e) => {
+                const cycle = JSON.parse(e.data);
+                state.cycle = cycle.cycleNumber;
+                addCycleCard(cycle);
+                updateStats();
+            });
+
+            evtSource.onerror = () => {
+                setTimeout(connectSSE, 3000);
+                evtSource.close();
+            };
+        }
+
+        // ──── Demo Mode (for when no live data) ────
+        async function loadInitialState() {
+            try {
+                const res = await fetch('/api/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status && data.status !== 'idle') {
+                        setStatus(data.status);
+                        if (data.phase) setPhase(data.phase);
+                        Object.assign(state, data);
+                        updateStats();
+                        if (data.status === 'running') startTimer();
+
+                        // Load existing cycles
+                        if (data.worktreeId) {
+                            const cRes = await fetch(`/api/cycles/${data.worktreeId}`);
+                            if (cRes.ok) {
+                                const cycles = await cRes.json();
+                                cycles.forEach(addCycleCard);
+                            }
+                        }
+
+                        // Load existing events
+                        const eRes = await fetch('/api/events');
+                        if (eRes.ok) {
+                            const events = await eRes.json();
+                            events.forEach(ev => addFeedItem(ev.type || 'info', ev.html || ev.message, ev.time));
+                        }
+                    }
+                }
+            } catch (e) {
+                // server not available, dashboard in static mode
+            }
+        }
+
+        // ──── Init ────
+        loadInitialState();
+        connectSSE();
+    })();
+    </script>
+</body>
+</html>
