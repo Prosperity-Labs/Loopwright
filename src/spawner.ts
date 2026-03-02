@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { findVenvBinDir } from "./test-runner.ts";
 
 export interface SpawnAgentOptions {
   worktreePath: string;
@@ -7,6 +8,8 @@ export interface SpawnAgentOptions {
   agentType?: "claude" | "cursor" | "codex";
   /** Model override for the spawned agent. Accepts aliases ("sonnet", "opus", "o3") or full model IDs. */
   model?: string;
+  /** System prompt / project context to inject into the agent. */
+  systemPrompt?: string;
   dbPath: string;
   eventsPath: string;
   sessionId?: string;
@@ -30,16 +33,17 @@ function randomSuffix(): string {
   return Math.random().toString(36).slice(2, 6);
 }
 
-function buildCommand(agentType: NonNullable<SpawnAgentOptions["agentType"]>, prompt: string, model?: string): string[] {
+function buildCommand(agentType: NonNullable<SpawnAgentOptions["agentType"]>, prompt: string, model?: string, systemPrompt?: string): string[] {
   switch (agentType) {
     case "cursor":
-      return ["cursor", "--cli", prompt];
+      return ["cursor-agent", "-p", "--trust", "--workspace", ".", systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt];
     case "codex":
-      return ["codex", prompt];
+      return ["codex", "exec", "--full-auto", "--sandbox", "danger-full-access", systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt];
     case "claude":
     default: {
       const cmd = ["claude", "--dangerously-skip-permissions", "--print", "--max-turns", "50"];
       if (model) cmd.push("--model", model);
+      if (systemPrompt) cmd.push("--append-system-prompt", systemPrompt);
       cmd.push(prompt);
       return cmd;
     }
@@ -82,7 +86,7 @@ export async function spawnAgent(options: SpawnAgentOptions): Promise<SpawnedAge
   const agentId = `agent-${agentType}-${Date.now()}-${randomSuffix()}`;
   const sessionId = options.sessionId ?? `session-${agentId}`;
   const startedAt = new Date().toISOString();
-  const cmd = options.commandOverride ?? buildCommand(agentType, options.prompt, options.model);
+  const cmd = options.commandOverride ?? buildCommand(agentType, options.prompt, options.model, options.systemPrompt);
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string | undefined>),
@@ -92,6 +96,12 @@ export async function spawnAgent(options: SpawnAgentOptions): Promise<SpawnedAge
 
   if (options.worktreeId !== undefined) {
     env.LOOPWRIGHT_WORKTREE_ID = String(options.worktreeId);
+  }
+
+  // Prepend venv bin to PATH so spawned agents can find pytest, python3, etc.
+  const venvBin = findVenvBinDir(options.worktreePath);
+  if (venvBin) {
+    env.PATH = `${venvBin}:${env.PATH ?? ""}`;
   }
 
   const proc = Bun.spawn({
