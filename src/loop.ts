@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { create_checkpoint } from "./checkpoint.ts";
 import { writeCorrectionCycle } from "./correction-writer.ts";
 import { openLoopwrightDb, type LoopwrightDB } from "./db.ts";
@@ -43,6 +44,7 @@ export interface CycleResult {
   passed: boolean;
   checkpointId?: number;
   agentSessionId?: string;
+  agentContext?: string;
   duration_ms: number;
 }
 
@@ -115,6 +117,78 @@ function focusPrompt(taskPrompt: string): string {
   // Fallback: first non-empty line, trimmed
   const first = lines[0] ?? taskPrompt.trim();
   return first.split(/\s+/).slice(0, MAX_PROMPT_WORDS).join(" ");
+}
+
+/**
+ * Write .claude/settings.json into the worktree with pre-approved permissions.
+ * Prevents headless agents from hanging on permission prompts.
+ */
+export function writePermissionsFile(worktreePath: string): void {
+  const claudeDir = join(worktreePath, ".claude");
+  mkdirSync(claudeDir, { recursive: true });
+  const settings = {
+    permissions: {
+      allow: [
+        "Bash(engram search*)",
+        "Bash(engram brief*)",
+        "Bash(pytest*)",
+        "Bash(bun test*)",
+        "Bash(git *)",
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+      ],
+    },
+  };
+  writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(settings, null, 2), "utf8");
+}
+
+/**
+ * Write CLAUDE.md into the worktree before agent spawn.
+ * Contains the full untruncated task and a measurement tracking header
+ * so the agent has full context even when the spawn prompt is focused/truncated.
+ */
+export function writePreSpawnClaudeMd(worktreePath: string, taskPrompt: string, taskId?: string): void {
+  const id = taskId ?? randomUUID();
+  const startedAt = new Date().toISOString();
+  const content = `# Loopwright Task
+
+TASK_ID: ${id}
+STARTED_AT: ${startedAt}
+METRIC: tool_calls / files_changed / tests_passed
+
+## Full Task
+${taskPrompt}
+
+## Record when done
+- tool_calls_made:
+- files_changed:
+- tests_passed:
+- tests_failed:
+- unexpected_behaviors:
+`;
+  writeFileSync(join(worktreePath, "CLAUDE.md"), content, "utf8");
+}
+
+/**
+ * Read CLAUDE.md from worktree and extract the "Record when done" measurements section.
+ * Returns the raw text block if found, undefined otherwise.
+ */
+export function extractMeasurements(worktreePath: string): string | undefined {
+  const claudePath = join(worktreePath, "CLAUDE.md");
+  try {
+    const content = readFileSync(claudePath, "utf8");
+    const marker = "## Record when done";
+    const idx = content.indexOf(marker);
+    if (idx === -1) return undefined;
+    const section = content.slice(idx + marker.length).trim();
+    if (!section) return undefined;
+    return section;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildTriggerError(testResult: TestResult): string {
@@ -351,6 +425,13 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       task_description: options.taskPrompt,
     });
 
+    // Pre-approve permissions so headless agents don't hang on prompts
+    writePermissionsFile(worktreePath);
+
+    // Write CLAUDE.md with full task context + measurement header
+    const taskId = `${branchName}-${timestamp}`;
+    writePreSpawnClaudeMd(worktreePath, options.taskPrompt, taskId);
+
     // Generate project brief from Engram for agent context
     const projectBrief = await generateProjectBrief({
       repoPath,
@@ -437,6 +518,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
 
     // Initial run — pass project brief as system prompt for context
     const initialRun = await runAgentAndWait(agentPrompt, "initial", projectBrief);
+    const initialMeasurements = extractMeasurements(worktreePath);
     const initialTests = await runTestsAndRecord();
 
     cycles.push({
@@ -445,6 +527,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       testResult: initialTests,
       passed: initialTests.passed,
       agentSessionId: initialRun.sessionId,
+      agentContext: initialMeasurements,
       duration_ms: initialRun.duration_ms + initialTests.duration_ms,
     });
 
@@ -472,10 +555,13 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       cycleNumber += 1;
       const lastTestResult = cycles[cycles.length - 1]!.testResult;
 
+      // Grab agent context from previous cycle (if agent filled in measurements)
+      const prevCycle = cycles[cycles.length - 1];
       const { cycleId } = writeCorrectionCycle({
         db,
         worktreeId,
         testResult: lastTestResult,
+        agentContext: prevCycle?.agentContext,
       });
       logger.log(`[loop] correction-${cycleNumber}: recorded correction cycle ${cycleId}`);
 
@@ -504,6 +590,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
         "Read CLAUDE.md for the correction brief. Fix the errors described. Run tests to verify your fix.";
       const snapshotBefore = await getGitSnapshot(worktreePath);
       const corrRun = await runAgentAndWait(correctionPrompt, `correction-${cycleNumber}`);
+      const corrMeasurements = extractMeasurements(worktreePath);
       const snapshotAfter = await getGitSnapshot(worktreePath);
 
       // If correction agent made no changes, escalate rather than burning another cycle
@@ -515,6 +602,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
           testResult: lastTestResult,
           passed: false,
           agentSessionId: corrRun.sessionId,
+          agentContext: corrMeasurements,
           duration_ms: corrRun.duration_ms,
         });
         db.updateWorktreeStatus(worktreeId, "escalated", isoNow());
@@ -537,6 +625,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
         testResult: corrTests,
         passed: corrTests.passed,
         agentSessionId: corrRun.sessionId,
+        agentContext: corrMeasurements,
         duration_ms: corrRun.duration_ms + corrTests.duration_ms,
       });
 

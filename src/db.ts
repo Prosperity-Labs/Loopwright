@@ -118,6 +118,7 @@ export interface CorrectionCycleInsertInput {
   agent_session_id?: string | null;
   outcome?: "passed" | "failed" | "escalated" | null;
   duration_seconds?: number | null;
+  agent_context?: string | null;
   created_at?: string;
 }
 
@@ -131,6 +132,7 @@ export interface CorrectionCycleRow {
   agent_session_id: string | null;
   outcome: string | null;
   duration_seconds: number | null;
+  agent_context: string | null;
   created_at: string;
 }
 
@@ -216,6 +218,7 @@ CREATE TABLE IF NOT EXISTS correction_cycles (
   agent_session_id TEXT,
   outcome TEXT CHECK(outcome IN ('passed','failed','escalated')),
   duration_seconds INTEGER,
+  agent_context TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -351,14 +354,14 @@ export class LoopwrightDB {
     this.insertCorrectionCycleStmt = this.sqlite.prepare(`
       INSERT INTO correction_cycles (
         worktree_id, cycle_number, trigger_error, error_context, checkpoint_id,
-        agent_session_id, outcome, duration_seconds, created_at
+        agent_session_id, outcome, duration_seconds, agent_context, created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.getCorrectionCyclesStmt = this.sqlite.prepare(`
       SELECT id, worktree_id, cycle_number, trigger_error, error_context, checkpoint_id,
-             agent_session_id, outcome, duration_seconds, created_at
+             agent_session_id, outcome, duration_seconds, agent_context, created_at
       FROM correction_cycles
       WHERE worktree_id = ?
       ORDER BY cycle_number ASC, id ASC
@@ -372,7 +375,7 @@ export class LoopwrightDB {
 
     this.getLatestCorrectionCycleStmt = this.sqlite.prepare(`
       SELECT id, worktree_id, cycle_number, trigger_error, error_context, checkpoint_id,
-             agent_session_id, outcome, duration_seconds, created_at
+             agent_session_id, outcome, duration_seconds, agent_context, created_at
       FROM correction_cycles
       WHERE worktree_id = ?
       ORDER BY cycle_number DESC, id DESC
@@ -543,6 +546,7 @@ export class LoopwrightDB {
       input.agent_session_id ?? null,
       input.outcome ?? null,
       input.duration_seconds ?? null,
+      input.agent_context ?? null,
       input.created_at ?? isoNow(),
     );
     return Number(result.lastInsertRowid);

@@ -7,6 +7,7 @@ export interface WriteCorrectionOptions {
   testResult: TestResult;
   checkpointId?: number;
   agentSessionId?: string;
+  agentContext?: string;
 }
 
 function buildTriggerError(testResult: TestResult): string {
@@ -44,6 +45,7 @@ export function writeCorrectionCycle(options: WriteCorrectionOptions): {
     agent_session_id: options.agentSessionId ?? null,
     outcome,
     duration_seconds: Math.round(options.testResult.duration_ms / 1000),
+    agent_context: options.agentContext ?? null,
   });
 
   return {

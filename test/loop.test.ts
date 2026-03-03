@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openLoopwrightDb, LoopwrightDB } from "../src/db.ts";
-import { runLoop } from "../src/loop.ts";
+import { runLoop, writePermissionsFile, writePreSpawnClaudeMd, extractMeasurements } from "../src/loop.ts";
 import { registry } from "../src/spawner.ts";
-import { cleanupDir, createTempGitRepo, runCmdOrThrow } from "./test-utils.ts";
+import { cleanupDir, createTempGitRepo, runCmdOrThrow, makeTempDir } from "./test-utils.ts";
 
 const tempPaths: string[] = [];
 
@@ -201,4 +201,150 @@ test("Loop cleans up DB on all exit paths", async () => {
   }
 
   expect(closeCalls).toBeGreaterThanOrEqual(3);
+});
+
+// --- Fix 1: Atomic Prompt (CLAUDE.md in worktree) ---
+
+test("writePreSpawnClaudeMd creates CLAUDE.md with full task and measurements header", () => {
+  const dir = makeTempDir("claude-md-");
+  tempPaths.push(dir);
+
+  writePreSpawnClaudeMd(dir, "Add a logout button to the navbar with confirmation dialog", "test-task-42");
+
+  const content = readFileSync(join(dir, "CLAUDE.md"), "utf8");
+  expect(content).toContain("TASK_ID: test-task-42");
+  expect(content).toContain("STARTED_AT:");
+  expect(content).toContain("METRIC: tool_calls / files_changed / tests_passed");
+  expect(content).toContain("## Full Task");
+  expect(content).toContain("Add a logout button to the navbar with confirmation dialog");
+  expect(content).toContain("## Record when done");
+  expect(content).toContain("- tool_calls_made:");
+  expect(content).toContain("- files_changed:");
+  expect(content).toContain("- tests_passed:");
+  expect(content).toContain("- tests_failed:");
+  expect(content).toContain("- unexpected_behaviors:");
+});
+
+test("writePreSpawnClaudeMd generates UUID when no taskId provided", () => {
+  const dir = makeTempDir("claude-md-uuid-");
+  tempPaths.push(dir);
+
+  writePreSpawnClaudeMd(dir, "some task");
+  const content = readFileSync(join(dir, "CLAUDE.md"), "utf8");
+
+  // Should have a UUID-format TASK_ID
+  const match = content.match(/TASK_ID: (.+)/);
+  expect(match).toBeTruthy();
+  expect(match![1].length).toBeGreaterThanOrEqual(36);
+});
+
+// --- Fix 2: Pre-approve Permissions ---
+
+test("writePermissionsFile creates .claude/settings.json with allow list", () => {
+  const dir = makeTempDir("perms-");
+  tempPaths.push(dir);
+
+  writePermissionsFile(dir);
+
+  const settingsPath = join(dir, ".claude", "settings.json");
+  expect(existsSync(settingsPath)).toBe(true);
+
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  expect(settings.permissions).toBeTruthy();
+  expect(settings.permissions.allow).toBeArray();
+  expect(settings.permissions.allow).toContain("Bash(bun test*)");
+  expect(settings.permissions.allow).toContain("Bash(pytest*)");
+  expect(settings.permissions.allow).toContain("Read");
+  expect(settings.permissions.allow).toContain("Write");
+  expect(settings.permissions.allow).toContain("Edit");
+});
+
+// --- Fix 3: Measurement Tracking ---
+
+test("extractMeasurements returns section content when present", () => {
+  const dir = makeTempDir("measure-");
+  tempPaths.push(dir);
+
+  writeFileSync(join(dir, "CLAUDE.md"), `# Loopwright Task
+
+TASK_ID: abc
+STARTED_AT: 2026-03-02T00:00:00Z
+
+## Full Task
+Do something
+
+## Record when done
+- tool_calls_made: 5
+- files_changed: 2
+- tests_passed: 3
+- tests_failed: 0
+- unexpected_behaviors: none
+`, "utf8");
+
+  const result = extractMeasurements(dir);
+  expect(result).toBeTruthy();
+  expect(result).toContain("tool_calls_made: 5");
+  expect(result).toContain("files_changed: 2");
+  expect(result).toContain("tests_passed: 3");
+});
+
+test("extractMeasurements returns undefined when CLAUDE.md missing", () => {
+  const dir = makeTempDir("measure-missing-");
+  tempPaths.push(dir);
+
+  expect(extractMeasurements(dir)).toBeUndefined();
+});
+
+test("extractMeasurements returns undefined when section not present", () => {
+  const dir = makeTempDir("measure-nosection-");
+  tempPaths.push(dir);
+
+  writeFileSync(join(dir, "CLAUDE.md"), "# Just a regular file\n\nNo measurements here.\n", "utf8");
+  expect(extractMeasurements(dir)).toBeUndefined();
+});
+
+test("agent_context column stored in correction_cycles", () => {
+  const dir = makeTempDir("db-ctx-");
+  tempPaths.push(dir);
+
+  const db = openLoopwrightDb(join(dir, "sessions.db"));
+  try {
+    const wtId = db.upsertWorktree({ branch_name: "test-branch" });
+    const cycleId = db.insertCorrectionCycle({
+      worktree_id: wtId,
+      cycle_number: 1,
+      trigger_error: "test error",
+      agent_context: "- tool_calls_made: 10\n- files_changed: 3",
+    });
+
+    const cycles = db.getCorrectionCycles(wtId);
+    expect(cycles.length).toBe(1);
+    expect(cycles[0].agent_context).toBe("- tool_calls_made: 10\n- files_changed: 3");
+
+    const latest = db.getLatestCorrectionCycle(wtId);
+    expect(latest?.agent_context).toBe("- tool_calls_made: 10\n- files_changed: 3");
+  } finally {
+    db.close();
+  }
+});
+
+test("Loop creates CLAUDE.md and .claude/settings.json in worktree", async () => {
+  const repoPath = await createBunTestRepo("pass");
+  const dbPath = join(repoPath, "sessions.db");
+
+  const result = await runLoop({
+    repoPath,
+    dbPath,
+    taskPrompt: "Add a feature with full context test",
+    commandOverride: MOCK_AGENT_WITH_CHANGES,
+    logger: silentLogger,
+  });
+
+  // CLAUDE.md should exist in worktree
+  expect(existsSync(join(result.worktreePath, "CLAUDE.md"))).toBe(true);
+  const claudeContent = readFileSync(join(result.worktreePath, "CLAUDE.md"), "utf8");
+  expect(claudeContent).toContain("Add a feature with full context test");
+
+  // .claude/settings.json should exist
+  expect(existsSync(join(result.worktreePath, ".claude", "settings.json"))).toBe(true);
 });
