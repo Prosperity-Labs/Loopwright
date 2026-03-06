@@ -43,3 +43,17 @@ test-probe.txt
 
 # binary docs
 *.docx
+
+# private strategy & planning docs (kept locally, not in public repo)
+private/
+prompts/
+docs/experiments/
+findings.md
+progress.md
+task_plan.md
+sprint_prompts.md
+IDEAS_AND_DIRECTIONS.md
+loopwright_roadmap.md
+loopwright_detailed_roadmap.md
+run-sprint.sh
+run-structured-brief.ts
