@@ -134,6 +134,31 @@ test("Loop keeps worktree when cleanupWorktree=false", async () => {
   expect(existsSync(result.worktreePath)).toBe(true);
 });
 
+test("Auto-commit preserves uncommitted agent work before worktree cleanup", async () => {
+  const repoPath = await createBunTestRepo("pass");
+  tempPaths.push(repoPath);
+  const dbPath = join(repoPath, "sessions.db");
+
+  // Agent creates a file but does NOT commit it
+  const UNCOMMITTED_CHANGES = ["bash", "-c", "echo 'new feature' > uncommitted.ts && git add uncommitted.ts"];
+
+  const result = await runLoop({
+    repoPath,
+    dbPath,
+    taskPrompt: "noop",
+    commandOverride: UNCOMMITTED_CHANGES,
+    logger: silentLogger,
+  });
+
+  // Worktree should be cleaned up
+  expect(existsSync(result.worktreePath)).toBe(false);
+
+  // But the branch should have the auto-commit with the file
+  const { execSync } = await import("node:child_process");
+  const log = execSync(`git log ${result.branchName} --oneline`, { cwd: repoPath }).toString();
+  expect(log).toContain("auto-save agent work");
+});
+
 test("registry.killAll terminates all running agents", async () => {
   const dir = makeTempDir("cb-killall-");
   tempPaths.push(dir);

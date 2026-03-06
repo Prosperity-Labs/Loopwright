@@ -205,6 +205,36 @@ export function extractMeasurements(worktreePath: string): string | undefined {
   }
 }
 
+/**
+ * Auto-commit any uncommitted agent work in the worktree.
+ * Called before worktree cleanup so changes survive on the branch.
+ */
+async function autoCommitWorktree(worktreePath: string, logger: Pick<Console, "log" | "warn">): Promise<boolean> {
+  // Check if there's anything to commit
+  const status = await runCommand(worktreePath, ["git", "status", "--porcelain"]);
+  if (!status.stdout.trim()) {
+    logger.log("[loop] auto-commit: nothing to commit");
+    return false;
+  }
+
+  const addResult = await runCommand(worktreePath, ["git", "add", "-A"]);
+  if (addResult.exit_code !== 0) {
+    logger.warn(`[loop] auto-commit: git add failed (exit ${addResult.exit_code})`);
+    return false;
+  }
+
+  const commitResult = await runCommand(worktreePath, [
+    "git", "commit", "-m", "loopwright: auto-save agent work before cleanup",
+  ]);
+  if (commitResult.exit_code !== 0) {
+    logger.warn(`[loop] auto-commit: git commit failed (exit ${commitResult.exit_code})`);
+    return false;
+  }
+
+  logger.log("[loop] auto-commit: saved agent work to branch");
+  return true;
+}
+
 function buildTriggerError(testResult: TestResult): string {
   const first = testResult.errors[0];
   if (!first) return `Test failed with exit code ${testResult.exit_code}`;
@@ -735,6 +765,15 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
         } catch {
           // no-op
         }
+      }
+    }
+
+    // Auto-commit any uncommitted agent work so it survives on the branch
+    if (shouldCleanup) {
+      try {
+        await autoCommitWorktree(worktreePath, logger);
+      } catch (err) {
+        logger.warn(`[loop] auto-commit failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
