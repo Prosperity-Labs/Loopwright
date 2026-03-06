@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { openLoopwrightDb, LoopwrightDB } from "../src/db.ts";
 import { runLoop, writePermissionsFile, writePreSpawnClaudeMd, extractMeasurements } from "../src/loop.ts";
 import { registry } from "../src/spawner.ts";
-import { cleanupDir, createTempGitRepo, runCmdOrThrow, makeTempDir } from "./test-utils.ts";
+import { cleanupDir, createBunTestRepo, runCmdOrThrow, makeTempDir } from "./test-utils.ts";
 
 const tempPaths: string[] = [];
 
@@ -24,26 +24,14 @@ afterEach(() => {
   }
 });
 
-async function createBunTestRepo(kind: "pass" | "fail"): Promise<string> {
-  const repo = await createTempGitRepo();
+async function createBunTestRepoTracked(kind: "pass" | "fail"): Promise<string> {
+  const repo = await createBunTestRepo(kind);
   tempPaths.push(repo);
-
-  writeFileSync(join(repo, "bunfig.toml"), "[test]\n", "utf8");
-  writeFileSync(
-    join(repo, "math.test.ts"),
-    kind === "pass"
-      ? `import { expect, test } from "bun:test";\n\ntest("math", () => {\n  expect(1 + 1).toBe(2);\n});\n`
-      : `import { expect, test } from "bun:test";\n\ntest("math", () => {\n  expect(1 + 1).toBe(3);\n});\n`,
-    "utf8",
-  );
-
-  await runCmdOrThrow(repo, ["git", "add", "bunfig.toml", "math.test.ts"]);
-  await runCmdOrThrow(repo, ["git", "commit", "-m", `add ${kind} test`]);
   return repo;
 }
 
 test("Loop with passing agent returns passed", async () => {
-  const repoPath = await createBunTestRepo("pass");
+  const repoPath = await createBunTestRepoTracked("pass");
   const dbPath = join(repoPath, "sessions.db");
 
   const result = await runLoop({
@@ -72,7 +60,7 @@ test("Loop with passing agent returns passed", async () => {
 });
 
 test("Loop escalates after max cycles", async () => {
-  const repoPath = await createBunTestRepo("fail");
+  const repoPath = await createBunTestRepoTracked("fail");
   const dbPath = join(repoPath, "sessions.db");
 
   const result = await runLoop({
@@ -101,7 +89,7 @@ test("Loop escalates after max cycles", async () => {
 });
 
 test("Loop creates worktree and branch", async () => {
-  const repoPath = await createBunTestRepo("pass");
+  const repoPath = await createBunTestRepoTracked("pass");
   const dbPath = join(repoPath, "sessions.db");
 
   const result = await runLoop({
@@ -109,6 +97,7 @@ test("Loop creates worktree and branch", async () => {
     dbPath,
     taskPrompt: "noop",
     commandOverride: MOCK_AGENT_WITH_CHANGES,
+    cleanupWorktree: false,
     logger: silentLogger,
   });
 
@@ -121,7 +110,7 @@ test("Loop creates worktree and branch", async () => {
 });
 
 test("Loop records all cycles in result", async () => {
-  const repoPath = await createBunTestRepo("fail");
+  const repoPath = await createBunTestRepoTracked("fail");
   const dbPath = join(repoPath, "sessions.db");
 
   const result = await runLoop({
@@ -141,7 +130,7 @@ test("Loop records all cycles in result", async () => {
 });
 
 test("Loop escalates immediately when agent makes no changes", async () => {
-  const repoPath = await createBunTestRepo("pass");
+  const repoPath = await createBunTestRepoTracked("pass");
   const dbPath = join(repoPath, "sessions.db");
 
   const result = await runLoop({
@@ -178,7 +167,7 @@ test("Loop cleans up DB on all exit paths", async () => {
   };
 
   try {
-    const passRepo = await createBunTestRepo("pass");
+    const passRepo = await createBunTestRepoTracked("pass");
     await runLoop({
       repoPath: passRepo,
       dbPath: join(passRepo, "sessions.db"),
@@ -187,7 +176,7 @@ test("Loop cleans up DB on all exit paths", async () => {
       logger: silentLogger,
     });
 
-    const failRepo = await createBunTestRepo("fail");
+    const failRepo = await createBunTestRepoTracked("fail");
     await runLoop({
       repoPath: failRepo,
       dbPath: join(failRepo, "sessions.db"),
@@ -329,7 +318,7 @@ test("agent_context column stored in correction_cycles", () => {
 });
 
 test("Loop creates CLAUDE.md and .claude/settings.json in worktree", async () => {
-  const repoPath = await createBunTestRepo("pass");
+  const repoPath = await createBunTestRepoTracked("pass");
   const dbPath = join(repoPath, "sessions.db");
 
   const result = await runLoop({
@@ -337,6 +326,7 @@ test("Loop creates CLAUDE.md and .claude/settings.json in worktree", async () =>
     dbPath,
     taskPrompt: "Add a feature with full context test",
     commandOverride: MOCK_AGENT_WITH_CHANGES,
+    cleanupWorktree: false,
     logger: silentLogger,
   });
 

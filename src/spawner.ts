@@ -55,6 +55,44 @@ function appendEvent(eventsPath: string, event: Record<string, unknown>): void {
   appendFileSync(eventsPath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
+export interface WaitResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  timedOut: boolean;
+}
+
+export async function waitForAgent(agent: SpawnedAgent, timeoutMs?: number): Promise<WaitResult> {
+  let timedOut = false;
+  const timeoutId = timeoutMs != null
+    ? setTimeout(() => {
+        timedOut = true;
+        try {
+          agent.process.kill();
+        } catch {
+          // no-op
+        }
+      }, timeoutMs)
+    : undefined;
+
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      agent.process.exited,
+      new Response(agent.process.stdout).text(),
+      new Response(agent.process.stderr).text(),
+    ]);
+
+    return {
+      stdout,
+      stderr: timedOut ? `${stderr}Agent timed out` : stderr,
+      exitCode: timedOut ? 124 : exitCode,
+      timedOut,
+    };
+  } finally {
+    if (timeoutId != null) clearTimeout(timeoutId);
+  }
+}
+
 export class AgentRegistry {
   private readonly agents = new Map<string, SpawnedAgent>();
 
@@ -75,6 +113,19 @@ export class AgentRegistry {
   }
 
   clear(): void {
+    this.agents.clear();
+  }
+
+  async killAll(): Promise<void> {
+    const agents = [...this.agents.values()];
+    for (const agent of agents) {
+      try {
+        agent.process.kill();
+      } catch {
+        // no-op — process may already be dead
+      }
+    }
+    await Promise.allSettled(agents.map((a) => a.process.exited));
     this.agents.clear();
   }
 }

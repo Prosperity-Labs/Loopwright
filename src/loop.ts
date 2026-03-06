@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { create_checkpoint } from "./checkpoint.ts";
 import { writeCorrectionCycle } from "./correction-writer.ts";
 import { openLoopwrightDb, type LoopwrightDB } from "./db.ts";
-import { spawnAgent } from "./spawner.ts";
+import { spawnAgent, waitForAgent, registry } from "./spawner.ts";
+import { removeWorktree } from "./ab-runner.ts";
 import { runTests, type TestResult } from "./test-runner.ts";
 
 export interface LoopOptions {
@@ -24,6 +25,19 @@ export interface LoopOptions {
   commandOverride?: string[];
   /** Override auto-detected test command (e.g. "pytest tests/" or "bun test src/"). */
   testCommand?: string;
+  /** Max time (ms) for a single agent run before killing it. Default: 600_000 (10 min). */
+  agentTimeoutMs?: number;
+  /** Max time (ms) for the entire loop before aborting. Default: 1_800_000 (30 min). */
+  loopTimeoutMs?: number;
+  /** Remove the worktree directory after loop finishes. Default: true. */
+  cleanupWorktree?: boolean;
+}
+
+export class LoopTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LoopTimeoutError";
+  }
 }
 
 export interface LoopResult {
@@ -399,12 +413,21 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
   const baseBranch = options.baseBranch ?? "main";
   const maxCycles = options.maxCycles ?? 3;
   const logger = options.logger ?? console;
+  const agentTimeoutMs = options.agentTimeoutMs ?? 600_000;
+  const loopTimeoutMs = options.loopTimeoutMs ?? 1_800_000;
+  const shouldCleanup = options.cleanupWorktree !== false;
   const timestamp = Date.now();
   const branchName = `loopwright-${timestamp}`;
   const worktreePath = join(repoPath, ".loopwright", "runs", `run-${timestamp}`);
   const eventsPath = join(dirname(worktreePath), "events.jsonl");
   const repoName = basename(repoPath);
   const loopStart = performance.now();
+
+  function checkLoopTimeout(): void {
+    if (performance.now() - loopStart > loopTimeoutMs) {
+      throw new LoopTimeoutError(`Loop exceeded ${loopTimeoutMs}ms timeout`);
+    }
+  }
 
   await createGitWorktree(repoPath, worktreePath, branchName, baseBranch);
 
@@ -448,7 +471,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       prompt: string,
       cycleLabel: string,
       systemPrompt?: string,
-    ): Promise<{ stdout: string; stderr: string; exit_code: number; duration_ms: number; sessionId: string }> => {
+    ): Promise<{ stdout: string; stderr: string; exit_code: number; duration_ms: number; sessionId: string; timedOut: boolean }> => {
       const startMs = performance.now();
       const agent = await spawnAgent({
         worktreePath,
@@ -464,25 +487,25 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
 
       logger.log(`[loop] ${cycleLabel}: agent ${agent.agentId} spawned`);
 
-      const [exit_code, stdout, stderr] = await Promise.all([
-        agent.process.exited,
-        new Response(agent.process.stdout).text(),
-        new Response(agent.process.stderr).text(),
-      ]);
+      const result = await waitForAgent(agent, agentTimeoutMs);
       const duration_ms = Math.round(performance.now() - startMs);
 
-      logger.log(`[loop] ${cycleLabel}: agent finished (exit=${exit_code}, ${duration_ms}ms)`);
+      if (result.timedOut) {
+        logger.warn(`[loop] ${cycleLabel}: agent timed out after ${agentTimeoutMs}ms`);
+      }
+
+      logger.log(`[loop] ${cycleLabel}: agent finished (exit=${result.exitCode}, ${duration_ms}ms)`);
 
       // Log agent output tail for debuggability
       const tail = (s: string) => s.slice(-500).trim();
-      if (exit_code !== 0 || stdout.trim()) {
-        logger.log(`[loop] ${cycleLabel} stdout (last 500):\n${tail(stdout)}`);
+      if (result.exitCode !== 0 || result.stdout.trim()) {
+        logger.log(`[loop] ${cycleLabel} stdout (last 500):\n${tail(result.stdout)}`);
       }
-      if (stderr.trim()) {
-        logger.warn(`[loop] ${cycleLabel} stderr (last 500):\n${tail(stderr)}`);
+      if (result.stderr.trim()) {
+        logger.warn(`[loop] ${cycleLabel} stderr (last 500):\n${tail(result.stderr)}`);
       }
 
-      return { stdout, stderr, exit_code, duration_ms, sessionId: agent.sessionId };
+      return { stdout: result.stdout, stderr: result.stderr, exit_code: result.exitCode, duration_ms, sessionId: agent.sessionId, timedOut: result.timedOut };
     };
 
     const runTestsAndRecord = async (): Promise<TestResult> => {
@@ -517,7 +540,21 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
     }
 
     // Initial run — pass project brief as system prompt for context
+    checkLoopTimeout();
     const initialRun = await runAgentAndWait(agentPrompt, "initial", projectBrief);
+    if (initialRun.timedOut) {
+      logger.warn("[loop] initial agent timed out — escalating");
+      db.updateWorktreeStatus(worktreeId, "escalated", isoNow());
+      return {
+        status: "escalated",
+        worktreeId,
+        branchName,
+        worktreePath,
+        totalCycles: 0,
+        cycles: [],
+        duration_ms: Math.round(performance.now() - loopStart),
+      };
+    }
     const initialMeasurements = extractMeasurements(worktreePath);
     const initialTests = await runTestsAndRecord();
 
@@ -553,6 +590,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
     let cycleNumber = 0;
     while (cycleNumber < maxCycles) {
       cycleNumber += 1;
+      checkLoopTimeout();
       const lastTestResult = cycles[cycles.length - 1]!.testResult;
 
       // Grab agent context from previous cycle (if agent filled in measurements)
@@ -590,6 +628,19 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
         "Read CLAUDE.md for the correction brief. Fix the errors described. Run tests to verify your fix.";
       const snapshotBefore = await getGitSnapshot(worktreePath);
       const corrRun = await runAgentAndWait(correctionPrompt, `correction-${cycleNumber}`);
+      if (corrRun.timedOut) {
+        logger.warn(`[loop] correction-${cycleNumber}: agent timed out — escalating`);
+        db.updateWorktreeStatus(worktreeId, "escalated", isoNow());
+        return {
+          status: "escalated",
+          worktreeId,
+          branchName,
+          worktreePath,
+          totalCycles: cycleNumber,
+          cycles,
+          duration_ms: Math.round(performance.now() - loopStart),
+        };
+      }
       const corrMeasurements = extractMeasurements(worktreePath);
       const snapshotAfter = await getGitSnapshot(worktreePath);
 
@@ -645,6 +696,25 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
       duration_ms: Math.round(performance.now() - loopStart),
     };
   } catch (error) {
+    if (error instanceof LoopTimeoutError) {
+      logger.warn(`[loop] ${error.message} — escalating`);
+      if (worktreeId > 0) {
+        try {
+          db.updateWorktreeStatus(worktreeId, "escalated", isoNow());
+        } catch {
+          // best effort
+        }
+      }
+      return {
+        status: "escalated",
+        worktreeId,
+        branchName,
+        worktreePath,
+        totalCycles: 0,
+        cycles: [],
+        duration_ms: Math.round(performance.now() - loopStart),
+      };
+    }
     logger.error(`[loop] FATAL ERROR:`, error);
     if (worktreeId > 0) {
       try {
@@ -656,6 +726,26 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
     throw error;
   } finally {
     db.close();
+
+    // Kill any agents still running in this worktree
+    for (const agent of registry.list()) {
+      if (agent.worktreePath === worktreePath) {
+        try {
+          agent.process.kill();
+        } catch {
+          // no-op
+        }
+      }
+    }
+
+    // Clean up worktree directory
+    if (shouldCleanup) {
+      try {
+        await removeWorktree(repoPath, worktreePath);
+      } catch (err) {
+        logger.warn(`[loop] worktree cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 }
 
@@ -666,11 +756,24 @@ if (import.meta.main) {
     process.exit(1);
   }
 
+  process.on("SIGINT", async () => {
+    console.warn("\n[loop] SIGINT received — killing all agents");
+    await registry.killAll();
+    process.exit(130);
+  });
+
+  const agentType = (process.env.LOOPWRIGHT_AGENT_TYPE as LoopOptions["agentType"]) ?? undefined;
+  const agentTimeoutMs = process.env.LOOPWRIGHT_AGENT_TIMEOUT_MS ? Number(process.env.LOOPWRIGHT_AGENT_TIMEOUT_MS) : undefined;
+  const loopTimeoutMs = process.env.LOOPWRIGHT_LOOP_TIMEOUT_MS ? Number(process.env.LOOPWRIGHT_LOOP_TIMEOUT_MS) : undefined;
+
   const result = await runLoop({
     taskPrompt,
     repoPath,
     dbPath: dbPath ?? join(repoPath, "sessions.db"),
     baseBranch: baseBranch ?? "main",
+    agentType,
+    agentTimeoutMs,
+    loopTimeoutMs,
   });
 
   console.log(JSON.stringify(result, null, 2));

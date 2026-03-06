@@ -2,6 +2,23 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+export async function createBunTestRepo(kind: "pass" | "fail"): Promise<string> {
+  const repo = await createTempGitRepo();
+
+  writeFileSync(join(repo, "bunfig.toml"), "[test]\n", "utf8");
+  writeFileSync(
+    join(repo, "math.test.ts"),
+    kind === "pass"
+      ? `import { expect, test } from "bun:test";\n\ntest("math", () => {\n  expect(1 + 1).toBe(2);\n});\n`
+      : `import { expect, test } from "bun:test";\n\ntest("math", () => {\n  expect(1 + 1).toBe(3);\n});\n`,
+    "utf8",
+  );
+
+  await runCmdOrThrow(repo, ["git", "add", "bunfig.toml", "math.test.ts"]);
+  await runCmdOrThrow(repo, ["git", "commit", "-m", `add ${kind} test`]);
+  return repo;
+}
+
 export function makeTempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }

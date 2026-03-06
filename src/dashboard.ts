@@ -46,6 +46,7 @@ const port = Number(Bun.argv[4] ?? 8790);
 const dashboardHtml = resolve(import.meta.dir, "../public/dashboard.html");
 
 let db: LoopwrightDB | null = null;
+let runningLoopProc: ReturnType<typeof Bun.spawn> | null = null;
 const clients: SSEClient[] = [];
 const feedHistory: Array<{ type: string; html: string; time: string }> = [];
 
@@ -363,7 +364,16 @@ const server = Bun.serve({
 
     // REST: trigger a loop (POST /api/run)
     if (url.pathname === "/api/run" && req.method === "POST") {
-      const body = await req.json() as { taskPrompt: string; repoPath: string; dbPath?: string; baseBranch?: string; maxCycles?: number };
+      const body = await req.json() as {
+        taskPrompt: string;
+        repoPath: string;
+        dbPath?: string;
+        baseBranch?: string;
+        maxCycles?: number;
+        agentType?: string;
+        agentTimeoutMs?: number;
+        loopTimeoutMs?: number;
+      };
 
       // Reset state
       state.status = "running";
@@ -377,7 +387,7 @@ const server = Bun.serve({
       lastCycleCount = 0;
       feedHistory.length = 0;
 
-      pushEvent("info", `<strong>Starting loop</strong> for <code>${body.repoPath}</code>`);
+      pushEvent("info", `<strong>Starting loop</strong> for <code>${body.repoPath}</code> (agent: ${body.agentType ?? "claude"})`);
       broadcastStatus();
 
       // Spawn loop.ts in background
@@ -389,12 +399,22 @@ const server = Bun.serve({
         body.baseBranch ?? "main",
       ];
 
+      // Pass agent config via env vars
+      const loopEnv: Record<string, string> = {
+        ...(process.env as Record<string, string>),
+      };
+      if (body.agentType) loopEnv.LOOPWRIGHT_AGENT_TYPE = body.agentType;
+      if (body.agentTimeoutMs) loopEnv.LOOPWRIGHT_AGENT_TIMEOUT_MS = String(body.agentTimeoutMs);
+      if (body.loopTimeoutMs) loopEnv.LOOPWRIGHT_LOOP_TIMEOUT_MS = String(body.loopTimeoutMs);
+
       const proc = Bun.spawn({
         cmd: loopCmd,
         stdout: "pipe",
         stderr: "pipe",
         cwd: resolve(import.meta.dir, ".."),
+        env: loopEnv,
       });
+      runningLoopProc = proc;
 
       // Don't await — let it run in background
       proc.exited.then(async (exitCode) => {
@@ -414,9 +434,57 @@ const server = Bun.serve({
           state.phase = null;
           broadcastStatus();
         }
+        runningLoopProc = null;
       });
 
       return Response.json({ status: "started", pid: proc.pid });
+    }
+
+    // REST: run history
+    if (url.pathname === "/api/history") {
+      try {
+        const database = getDb();
+        const rows = database.sqlite
+          .prepare(
+            `SELECT w.id, w.branch_name, w.task_description, w.status, w.created_at, w.resolved_at,
+                    c.git_sha
+             FROM worktrees w
+             LEFT JOIN checkpoints c ON c.worktree_id = w.id
+             GROUP BY w.id
+             ORDER BY w.id DESC
+             LIMIT 20`
+          )
+          .all() as Array<{
+            id: number;
+            branch_name: string;
+            task_description: string | null;
+            status: string;
+            created_at: string;
+            resolved_at: string | null;
+            git_sha: string | null;
+          }>;
+        return Response.json(rows);
+      } catch {
+        return Response.json([]);
+      }
+    }
+
+    // REST: abort running loop (POST /api/stop)
+    if (url.pathname === "/api/stop" && req.method === "POST") {
+      if (!runningLoopProc) {
+        return Response.json({ status: "no_loop_running" }, { status: 404 });
+      }
+      try {
+        runningLoopProc.kill();
+      } catch {
+        // process may already be dead
+      }
+      state.status = "failed";
+      state.phase = null;
+      broadcastStatus();
+      pushEvent("info", `<strong>Loop aborted by user</strong>`);
+      runningLoopProc = null;
+      return Response.json({ status: "stopped" });
     }
 
     return new Response("Not found", { status: 404 });
@@ -434,6 +502,14 @@ console.log(`  Events: ${eventsPath}\n`);
 
 // Cleanup on exit
 process.on("SIGINT", () => {
+  if (runningLoopProc) {
+    try {
+      runningLoopProc.kill();
+    } catch {
+      // no-op
+    }
+    runningLoopProc = null;
+  }
   clearInterval(dbPollInterval);
   clearInterval(eventsPollInterval);
   db?.close();

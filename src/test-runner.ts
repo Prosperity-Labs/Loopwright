@@ -27,7 +27,7 @@ export interface TestResult {
 }
 
 const DEFAULT_BASE_BRANCH = "main";
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const BUN_ERROR_RE = /at\s+(.+?):(\d+):\d+/;
 const BUN_EXPECT_RE = /error:\s*(.+)/;
 const PYTEST_FAIL_RE = /FAILED\s+(\S+?)::(\S+)\s*-\s*(\w+Error):\s*(.*)/g;
