@@ -16,6 +16,7 @@ import { existsSync, readFileSync, statSync, watchFile, unwatchFile } from "node
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { openLoopwrightDb, type LoopwrightDB, type CorrectionCycleRow, type WorktreeRow, type CheckpointRow } from "./db.ts";
+import { AgentPool, type PoolOptions, type PoolState } from "./pool.ts";
 
 // ──── Types ────
 
@@ -47,6 +48,7 @@ const dashboardHtml = resolve(import.meta.dir, "../public/dashboard.html");
 
 let db: LoopwrightDB | null = null;
 let runningLoopProc: ReturnType<typeof Bun.spawn> | null = null;
+let activePool: AgentPool | null = null;
 const clients: SSEClient[] = [];
 const feedHistory: Array<{ type: string; html: string; time: string }> = [];
 
@@ -365,7 +367,8 @@ const server = Bun.serve({
     // REST: trigger a loop (POST /api/run)
     if (url.pathname === "/api/run" && req.method === "POST") {
       const body = await req.json() as {
-        taskPrompt: string;
+        taskPrompt?: string;
+        tasks?: Array<{ prompt: string; priority?: number }>;
         repoPath: string;
         dbPath?: string;
         baseBranch?: string;
@@ -373,33 +376,109 @@ const server = Bun.serve({
         agentType?: string;
         agentTimeoutMs?: number;
         loopTimeoutMs?: number;
+        concurrency?: number;
       };
+
+      const prompts = body.tasks
+        ? body.tasks
+        : body.taskPrompt
+          ? [{ prompt: body.taskPrompt, priority: 0 }]
+          : [];
+
+      if (prompts.length === 0) {
+        return Response.json({ error: "taskPrompt or tasks required" }, { status: 400 });
+      }
 
       // Reset state
       state.status = "running";
       state.phase = "spawn";
       state.cycle = 0;
       state.gitSha = null;
-      state.taskPrompt = body.taskPrompt;
+      state.taskPrompt = prompts.map(p => p.prompt).join("; ");
       state.repo = body.repoPath;
       state.maxCycles = body.maxCycles ?? 3;
       state.startTime = Date.now();
       lastCycleCount = 0;
       feedHistory.length = 0;
 
+      const useConcurrency = body.concurrency ?? prompts.length;
+
+      // Use pool for concurrent execution
+      if (useConcurrency > 1 || prompts.length > 1) {
+        const pool = new AgentPool({
+          repoPath: body.repoPath,
+          dbPath: body.dbPath ?? dbPath,
+          baseBranch: body.baseBranch ?? "main",
+          concurrency: useConcurrency,
+          agentType: (body.agentType as PoolOptions["agentType"]) ?? undefined,
+          agentTimeoutMs: body.agentTimeoutMs,
+          loopTimeoutMs: body.loopTimeoutMs,
+          maxCycles: body.maxCycles,
+        });
+        activePool = pool;
+
+        // Wire pool events to SSE
+        pool.addEventListener("task-queued", (e: Event) => {
+          const d = (e as CustomEvent).detail;
+          pushEvent("info", `Task <code>${d.taskId.slice(0, 12)}</code> queued`);
+          broadcast("pool-state", pool.getState());
+        });
+        pool.addEventListener("task-started", (e: Event) => {
+          const d = (e as CustomEvent).detail;
+          pushEvent("spawn", `<strong>${d.workerId}</strong> started task <code>${d.taskId.slice(0, 12)}</code>`);
+          broadcast("pool-state", pool.getState());
+        });
+        pool.addEventListener("task-completed", (e: Event) => {
+          const d = (e as CustomEvent).detail;
+          pushEvent(
+            d.status === "passed" ? "checkpoint" : d.status === "cancelled" ? "info" : "escalate",
+            `<strong>${d.workerId}</strong> task <code>${d.taskId.slice(0, 12)}</code> → ${d.status}`
+          );
+          broadcast("pool-state", pool.getState());
+        });
+
+        const taskIds: string[] = [];
+        for (const p of prompts) {
+          taskIds.push(pool.addTask(p.prompt, { priority: p.priority }));
+        }
+
+        pushEvent("info", `<strong>Pool started</strong> with ${prompts.length} tasks, ${useConcurrency} workers`);
+        broadcastStatus();
+
+        // Start pool in background
+        pool.start().then(async () => {
+          // Pool started — workers will run until drained
+        });
+
+        // Wait for all tasks to complete in background
+        Promise.all(taskIds.map(id => pool.waitForTask(id))).then((tasks) => {
+          const passed = tasks.filter(t => t.status === "passed").length;
+          const failed = tasks.filter(t => t.status !== "passed" && t.status !== "cancelled").length;
+          state.status = passed === tasks.length ? "passed" : failed > 0 ? "failed" : "idle";
+          state.phase = null;
+          broadcastStatus();
+          pushEvent(
+            passed === tasks.length ? "checkpoint" : "escalate",
+            `<strong>Pool finished:</strong> ${passed} passed, ${failed} failed of ${tasks.length} tasks`
+          );
+          activePool = null;
+        });
+
+        return Response.json({ status: "started", mode: "pool", taskIds, concurrency: useConcurrency });
+      }
+
+      // Single task — legacy subprocess mode
       pushEvent("info", `<strong>Starting loop</strong> for <code>${body.repoPath}</code> (agent: ${body.agentType ?? "claude"})`);
       broadcastStatus();
 
-      // Spawn loop.ts in background
       const loopCmd = [
         "bun", "run", resolve(import.meta.dir, "loop.ts"),
-        body.taskPrompt,
+        prompts[0].prompt,
         body.repoPath,
         body.dbPath ?? dbPath,
         body.baseBranch ?? "main",
       ];
 
-      // Pass agent config via env vars
       const loopEnv: Record<string, string> = {
         ...(process.env as Record<string, string>),
       };
@@ -416,7 +495,6 @@ const server = Bun.serve({
       });
       runningLoopProc = proc;
 
-      // Don't await — let it run in background
       proc.exited.then(async (exitCode) => {
         const stdout = await new Response(proc.stdout).text();
         try {
@@ -471,6 +549,16 @@ const server = Bun.serve({
 
     // REST: abort running loop (POST /api/stop)
     if (url.pathname === "/api/stop" && req.method === "POST") {
+      // Stop pool if active
+      if (activePool) {
+        const result = await activePool.drain();
+        activePool = null;
+        state.status = "idle";
+        state.phase = null;
+        broadcastStatus();
+        pushEvent("info", `<strong>Pool drained by user</strong> (${result.tasks.length} tasks)`);
+        return Response.json({ status: "stopped", tasks: result.tasks.length });
+      }
       if (!runningLoopProc) {
         return Response.json({ status: "no_loop_running" }, { status: 404 });
       }
@@ -487,6 +575,40 @@ const server = Bun.serve({
       return Response.json({ status: "stopped" });
     }
 
+    // ──── Pool API ────
+
+    // POST /api/pool/add-task — add a task to the running pool
+    if (url.pathname === "/api/pool/add-task" && req.method === "POST") {
+      if (!activePool) {
+        return Response.json({ error: "No active pool" }, { status: 404 });
+      }
+      const body = await req.json() as { prompt: string; priority?: number };
+      if (!body.prompt) {
+        return Response.json({ error: "prompt required" }, { status: 400 });
+      }
+      const taskId = activePool.addTask(body.prompt, { priority: body.priority });
+      pushEvent("info", `Task <code>${taskId.slice(0, 12)}</code> queued`);
+      return Response.json({ taskId });
+    }
+
+    // POST /api/pool/cancel-task/:id — cancel a queued/running task
+    const cancelMatch = url.pathname.match(/^\/api\/pool\/cancel-task\/(.+)$/);
+    if (cancelMatch && req.method === "POST") {
+      if (!activePool) {
+        return Response.json({ error: "No active pool" }, { status: 404 });
+      }
+      const cancelled = activePool.cancelTask(cancelMatch[1]);
+      return Response.json({ cancelled });
+    }
+
+    // GET /api/pool/status — full pool state
+    if (url.pathname === "/api/pool/status") {
+      if (!activePool) {
+        return Response.json({ status: "no_pool" });
+      }
+      return Response.json(activePool.getState());
+    }
+
     return new Response("Not found", { status: 404 });
   },
 });
@@ -501,7 +623,11 @@ console.log(`  DB:     ${dbPath}`);
 console.log(`  Events: ${eventsPath}\n`);
 
 // Cleanup on exit
-process.on("SIGINT", () => {
+process.on("SIGINT", async () => {
+  if (activePool) {
+    try { await activePool.stop(); } catch {}
+    activePool = null;
+  }
   if (runningLoopProc) {
     try {
       runningLoopProc.kill();

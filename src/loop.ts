@@ -31,6 +31,10 @@ export interface LoopOptions {
   loopTimeoutMs?: number;
   /** Remove the worktree directory after loop finishes. Default: true. */
   cleanupWorktree?: boolean;
+  /** Pre-built worktree path. If provided, skip worktree creation. Pool manages lifecycle. */
+  worktreePath?: string;
+  /** Pre-built branch name. Required when worktreePath is provided. */
+  worktreeBranch?: string;
 }
 
 export class LoopTimeoutError extends Error {
@@ -445,10 +449,12 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
   const logger = options.logger ?? console;
   const agentTimeoutMs = options.agentTimeoutMs ?? 600_000;
   const loopTimeoutMs = options.loopTimeoutMs ?? 1_800_000;
-  const shouldCleanup = options.cleanupWorktree !== false;
+  // When pool provides a worktree, pool manages its lifecycle
+  const ownedWorktree = !options.worktreePath;
+  const shouldCleanup = ownedWorktree && options.cleanupWorktree !== false;
   const timestamp = Date.now();
-  const branchName = `loopwright-${timestamp}`;
-  const worktreePath = join(repoPath, ".loopwright", "runs", `run-${timestamp}`);
+  const branchName = options.worktreeBranch ?? `loopwright-${timestamp}`;
+  const worktreePath = options.worktreePath ?? join(repoPath, ".loopwright", "runs", `run-${timestamp}`);
   const eventsPath = join(dirname(worktreePath), "events.jsonl");
   const repoName = basename(repoPath);
   const loopStart = performance.now();
@@ -459,7 +465,9 @@ export async function runLoop(options: LoopOptions): Promise<LoopResult> {
     }
   }
 
-  await createGitWorktree(repoPath, worktreePath, branchName, baseBranch);
+  if (ownedWorktree) {
+    await createGitWorktree(repoPath, worktreePath, branchName, baseBranch);
+  }
 
   const engramDbPath = options.engramDbPath ?? dbPath;
   const engramPath = resolveEngramPath(options.engramPath, engramDbPath);

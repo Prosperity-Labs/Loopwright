@@ -69,3 +69,43 @@ export async function createBranchCommit(repoPath: string, branch: string, fileN
   await runCmdOrThrow(repoPath, ["git", "add", fileName]);
   await runCmdOrThrow(repoPath, ["git", "commit", "-m", `update ${branch}`]);
 }
+
+/** Create a test repo with a SQLite database file for snapshot testing */
+export async function createBunTestRepoWithDB(kind: "pass" | "fail"): Promise<string> {
+  const repo = await createBunTestRepo(kind);
+
+  // Add a SQLite database file
+  const { Database } = await import("bun:sqlite");
+  const dbPath = join(repo, "app.db");
+  const db = new Database(dbPath);
+  db.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)");
+  db.exec("INSERT INTO items (name) VALUES ('test-item')");
+  db.close();
+
+  await runCmdOrThrow(repo, ["git", "add", "app.db"]);
+  await runCmdOrThrow(repo, ["git", "commit", "-m", "add app database"]);
+
+  return repo;
+}
+
+/** Create a test repo with multiple test files for pool testing */
+export async function createPoolTestRepo(kind: "pass" | "fail" = "pass"): Promise<string> {
+  const repo = await createTempGitRepo();
+
+  writeFileSync(join(repo, "bunfig.toml"), "[test]\n", "utf8");
+  const assertion = kind === "pass" ? "toBe(2)" : "toBe(3)";
+  writeFileSync(
+    join(repo, "math.test.ts"),
+    `import { expect, test } from "bun:test";\n\ntest("math", () => {\n  expect(1 + 1).${assertion};\n});\n`,
+    "utf8",
+  );
+  writeFileSync(
+    join(repo, "string.test.ts"),
+    `import { expect, test } from "bun:test";\n\ntest("string", () => {\n  expect("hello".length).${kind === "pass" ? "toBe(5)" : "toBe(4)"};\n});\n`,
+    "utf8",
+  );
+
+  await runCmdOrThrow(repo, ["git", "add", "."]);
+  await runCmdOrThrow(repo, ["git", "commit", "-m", `add ${kind} tests`]);
+  return repo;
+}
